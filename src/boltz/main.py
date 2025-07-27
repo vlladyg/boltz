@@ -32,6 +32,7 @@ from boltz.data.types import MSA, Manifest, Record
 from boltz.data.write.writer import BoltzAffinityWriter, BoltzWriter
 from boltz.model.models.boltz1 import Boltz1
 from boltz.model.models.boltz2 import Boltz2
+from boltz.model.models.boltz2_pc import Boltz2_pc
 
 CCD_URL = "https://huggingface.co/boltz-community/boltz-1/resolve/main/ccd.pkl"
 MOL_URL = "https://huggingface.co/boltz-community/boltz-2/resolve/main/mols.tar"
@@ -973,7 +974,7 @@ def cli() -> None:
 @click.option(
     "--model",
     default="boltz2",
-    type=click.Choice(["boltz1", "boltz2"]),
+    type=click.Choice(["boltz1", "boltz2", "boltz2_pc"]),
     help="The model to use for prediction. Default is boltz2.",
 )
 @click.option(
@@ -1068,7 +1069,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     api_key_header: Optional[str] = None,
     api_key_value: Optional[str] = None,
     use_potentials: bool = False,
-    model: Literal["boltz1", "boltz2"] = "boltz2",
+    model: Literal["boltz1", "boltz2", "boltz2_pc"] = "boltz2",
     method: Optional[str] = None,
     affinity_mw_correction: Optional[bool] = False,
     preprocessing_threads: int = 1,
@@ -1137,7 +1138,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     # Download necessary data and model
     if model == "boltz1":
         download_boltz1(cache)
-    elif model == "boltz2":
+    elif model == "boltz2" or model == "boltz2_pc":
         download_boltz2(cache)
     else:
         msg = f"Model {model} not supported. Supported: boltz1, boltz2."
@@ -1171,7 +1172,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         msa_server_password=msa_server_password,
         api_key_header=api_key_header,
         api_key_value=api_key_value,
-        boltz2=model == "boltz2",
+        boltz2=model == "boltz2" or model == "boltz2_pc",
         preprocessing_threads=preprocessing_threads,
         max_msa_seqs=max_msa_seqs,
     )
@@ -1226,7 +1227,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
                 devices = max(1, min(len(filtered_manifest.records), devices))
 
     # Set up model parameters
-    if model == "boltz2":
+    if model == "boltz2" or model == "boltz2_pc":
         diffusion_params = Boltz2DiffusionParams()
         step_scale = 1.5 if step_scale is None else step_scale
         diffusion_params.step_scale = step_scale
@@ -1240,7 +1241,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     msa_args = MSAModuleArgs(
         subsample_msa=subsample_msa,
         num_subsampled_msa=num_subsampled_msa,
-        use_paired_feature=model == "boltz2",
+        use_paired_feature=model == "boltz2" or model == "boltz2_pc",
     )
 
     # Create prediction writer
@@ -1248,7 +1249,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         data_dir=processed.targets_dir,
         output_dir=out_dir / "predictions",
         output_format=output_format,
-        boltz2=model == "boltz2",
+        boltz2=model == "boltz2" or model == "boltz2_pc",
         write_embeddings=write_embeddings,
     )
 
@@ -1268,7 +1269,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         click.echo(msg)
 
         # Create data module
-        if model == "boltz2":
+        if model == "boltz2" or model == "boltz2_pc":
             data_module = Boltz2InferenceDataModule(
                 manifest=processed.manifest,
                 target_dir=processed.targets_dir,
@@ -1291,7 +1292,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
 
         # Load model
         if checkpoint is None:
-            if model == "boltz2":
+            if model == "boltz2" or model == "boltz2_pc":
                 checkpoint = cache / "boltz2_conf.ckpt"
             else:
                 checkpoint = cache / "boltz1_conf.ckpt"
@@ -1310,7 +1311,13 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         steering_args.fk_steering = use_potentials
         steering_args.physical_guidance_update = use_potentials
 
-        model_cls = Boltz2 if model == "boltz2" else Boltz1
+        if model == "boltz2":
+            model_cls = Boltz2 
+        if model == "boltz1":
+            model_cls = Boltz1
+        if model == "boltz2_pc":
+            model_cls = Boltz2_pc
+            
         model_module = model_cls.load_from_checkpoint(
             checkpoint,
             strict=True,
@@ -1356,6 +1363,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             output_dir=out_dir / "predictions",
         )
 
+    
         data_module = Boltz2InferenceDataModule(
             manifest=manifest_filtered,
             target_dir=out_dir / "predictions",
@@ -1387,8 +1395,13 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         steering_args.fk_steering = False
         steering_args.physical_guidance_update = False
         steering_args.contact_guidance_update = False
+
+        if model == "boltz2":
+            model_cls = Boltz2
+        if model == "boltz2_pc":
+            model_cls = Boltz2_pc
         
-        model_module = Boltz2.load_from_checkpoint(
+        model_module = model_cls.load_from_checkpoint(
             affinity_checkpoint,
             strict=True,
             predict_args=predict_affinity_args,

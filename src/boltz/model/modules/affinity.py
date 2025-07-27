@@ -104,6 +104,9 @@ class AffinityModule(nn.Module):
         x_pred_repr = torch.bmm(token_to_rep_atom.float(), x_pred)
         d = torch.cdist(x_pred_repr, x_pred_repr)
 
+        print("x_pred shape", x_pred.shape)
+        print("token_to_rep_atom shape", token_to_rep_atom.shape)
+        print("x_pred_repr shape", x_pred_repr.shape)
         distogram = (d.unsqueeze(-1) > self.boundaries).sum(dim=-1).long()
         distogram = self.dist_bin_pairwise_embed(distogram)
 
@@ -123,6 +126,8 @@ class AffinityModule(nn.Module):
             + rec_mask[:, :, None] * lig_mask[:, None, :]
             + lig_mask[:, :, None] * lig_mask[:, None, :]
         )
+        print("lig_mask shape", lig_mask.shape)
+        print("rec_mask shape", rec_mask. shape)
         z = self.pairformer_stack(
             z,
             pair_mask=cross_pair_mask,
