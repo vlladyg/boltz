@@ -567,6 +567,7 @@ class AffinityInfo:
 
     chain_id: int
     mw: float
+    binder_type: str = "ligand"  # "ligand" or "protein" - defaults to "ligand" for compatibility
 
 
 @dataclass(frozen=True)
