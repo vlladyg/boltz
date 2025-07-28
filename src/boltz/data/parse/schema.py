@@ -801,6 +801,7 @@ def parse_polymer(
     components: dict[str, Mol],
     cyclic: bool,
     mol_dir: Path,
+    affinity: bool = False,
 ) -> Optional[ParsedChain]:
     """Process a sequence into a chain object.
 
@@ -921,6 +922,8 @@ def parse_polymer(
         type=chain_type,
         cyclic_period=cyclic_period,
         sequence=raw_sequence,
+        affinity=affinity,
+        affinity_mw=None,  # Protein molecular weight not needed for affinity prediction
     )
 
 
@@ -1060,18 +1063,20 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 msg = f"Could not find binder with name {binder} in the input!"
                 raise ValueError(msg)
 
-            if chain_name_to_entity_type[binder] != "ligand":
+            # Support both protein and ligand binders for affinity prediction
+            binder_type = chain_name_to_entity_type[binder]
+            if binder_type not in {"ligand", "protein"}:
                 msg = (
-                    f"Chain {binder} is not a ligand! "
-                    "Affinity is currently only supported for ligands."
+                    f"Chain {binder} is neither a ligand nor a protein! "
+                    "Affinity is currently supported for ligands and proteins."
                 )
                 raise ValueError(msg)
 
             affinity_ligands.add(binder)
 
-    # Check only one affinity ligand is present
+    # Check only one affinity binder is present
     if len(affinity_ligands) > 1:
-        msg = "Only one affinity ligand is currently supported!"
+        msg = "Only one affinity binder is currently supported!"
         raise ValueError(msg)
 
     # Go through entities and parse them
@@ -1094,11 +1099,11 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             elif isinstance(item[entity_type]["id"], list):
                 ids.extend(item[entity_type]["id"])
 
-        # Check if any affinity ligand is present
+        # Check if any affinity binder is present
         if len(ids) == 1:
             affinity = ids[0] in affinity_ligands
         elif (len(ids) > 1) and any(x in affinity_ligands for x in ids):
-            msg = "Cannot compute affinity for a ligand that has multiple copies!"
+            msg = "Cannot compute affinity for a binder that has multiple copies!"
             raise ValueError(msg)
         else:
             affinity = False
@@ -1176,6 +1181,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 chain_type=chain_type,
                 components=ccd,
                 cyclic=cyclic,
+                affinity=affinity,
                 mol_dir=mol_dir,
             )
 
@@ -1331,13 +1337,16 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
 
         # Add affinity info
         if chain.affinity and affinity_info is not None:
-            msg = "Cannot compute affinity for multiple ligands!"
+            msg = "Cannot compute affinity for multiple binders!"
             raise ValueError(msg)
 
         if chain.affinity:
+            # Determine binder type based on chain type 
+            binder_type = "protein" if chain.type == const.chain_type_ids["PROTEIN"] else "ligand"
             affinity_info = AffinityInfo(
                 chain_id=asym_id,
-                mw=chain.affinity_mw,
+                mw=chain.affinity_mw if chain.affinity_mw is not None else 0.0,
+                binder_type=binder_type,
             )
 
         # Find all copies of this chain in the assembly
