@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from boltz.data import const
 from boltz.data.crop.affinity import AffinityCropper
 from boltz.data.feature.featurizerv2 import Boltz2Featurizer
+from boltz.data.feature.protein_protein_featurizer import ProteinProteinFeaturizer
 from boltz.data.mol import load_canonicals, load_molecules
 from boltz.data.pad import pad_to_max
 from boltz.data.tokenize.boltz2 import Boltz2Tokenizer
@@ -431,3 +432,83 @@ class Boltz2InferenceDataModule(pl.LightningDataModule):
             ]:
                 batch[key] = batch[key].to(device)
         return batch
+
+
+class PredictionDataset_pc(PredictionDataset):
+    """Base iterable dataset."""
+
+    def __init__(
+        self,
+        manifest: Manifest,
+        target_dir: Path,
+        msa_dir: Path,
+        mol_dir: Path,
+        constraints_dir: Optional[Path] = None,
+        template_dir: Optional[Path] = None,
+        extra_mols_dir: Optional[Path] = None,
+        override_method: Optional[str] = None,
+        affinity: bool = False,
+    ) -> None:
+        super().__init__(
+            manifest=manifest,
+            target_dir=target_dir,
+            msa_dir=msa_dir,
+            mol_dir=mol_dir,
+            constraints_dir=constraints_dir,
+            template_dir=template_dir,
+            extra_mols_dir=extra_mols_dir,
+            override_method=override_method,
+            affinity=affinity,
+        )
+        self.featurizer = ProteinProteinFeaturizer()
+
+
+class Boltz2InferenceDataModule_pc(Boltz2InferenceDataModule):
+    """DataModule for Boltz2 inference."""
+
+    def __init__(
+        self,
+        manifest: Manifest,
+        target_dir: Path,
+        msa_dir: Path,
+        mol_dir: Path,
+        num_workers: int,
+        constraints_dir: Optional[Path] = None,
+        template_dir: Optional[Path] = None,
+        extra_mols_dir: Optional[Path] = None,
+        override_method: Optional[str] = None,
+        affinity: bool = False,
+    ) -> None:
+        super().__init__(
+            manifest=manifest,
+            target_dir=target_dir,
+            msa_dir=msa_dir,
+            mol_dir=mol_dir,
+            num_workers=num_workers,
+            constraints_dir=constraints_dir,
+            template_dir=template_dir,
+            extra_mols_dir=extra_mols_dir,
+            override_method=override_method,
+            affinity=affinity,
+        )
+
+    def predict_dataloader(self) -> DataLoader:
+        dataset = PredictionDataset_pc(
+            manifest=self.manifest,
+            target_dir=self.target_dir,
+            msa_dir=self.msa_dir,
+            mol_dir=self.mol_dir,
+            constraints_dir=self.constraints_dir,
+            template_dir=self.template_dir,
+            extra_mols_dir=self.extra_mols_dir,
+            override_method=self.override_method,
+            affinity=self.affinity,
+        )
+        return DataLoader(
+            dataset,
+            batch_size=1,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            shuffle=False,
+            collate_fn=collate,
+        )

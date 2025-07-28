@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from boltz.data import const
 from boltz.data.module.inference import BoltzInferenceDataModule
-from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
+from boltz.data.module.inferencev2 import Boltz2InferenceDataModule, Boltz2InferenceDataModule_pc
 from boltz.data.mol import load_canonicals
 from boltz.data.msa.mmseqs2 import run_mmseqs2
 from boltz.data.parse.a3m import parse_a3m
@@ -1371,19 +1371,32 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             output_dir=out_dir / "predictions",
         )
 
-    
-        data_module = Boltz2InferenceDataModule(
-            manifest=manifest_filtered,
-            target_dir=out_dir / "predictions",
-            msa_dir=processed.msa_dir,
-            mol_dir=mol_dir,
-            num_workers=num_workers,
-            constraints_dir=processed.constraints_dir,
-            template_dir=processed.template_dir,
-            extra_mols_dir=processed.extra_mols_dir,
-            override_method="other",
-            affinity=True,
-        )
+        if model == "boltz2":
+            data_module = Boltz2InferenceDataModule(
+                manifest=manifest_filtered,
+                target_dir=out_dir / "predictions",
+                msa_dir=processed.msa_dir,
+                mol_dir=mol_dir,
+                num_workers=num_workers,
+                constraints_dir=processed.constraints_dir,
+                template_dir=processed.template_dir,
+                extra_mols_dir=processed.extra_mols_dir,
+                override_method="other",
+                affinity=True,
+            )
+        elif model == 'boltz2_pc':
+            data_module = Boltz2InferenceDataModule_pc(
+                manifest=manifest_filtered,
+                target_dir=out_dir / "predictions",
+                msa_dir=processed.msa_dir,
+                mol_dir=mol_dir,
+                num_workers=num_workers,
+                constraints_dir=processed.constraints_dir,
+                template_dir=processed.template_dir,
+                extra_mols_dir=processed.extra_mols_dir,
+                override_method="other",
+                affinity=True,
+            )
 
         predict_affinity_args = {
             "recycling_steps": 5,
