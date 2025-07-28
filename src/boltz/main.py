@@ -971,6 +971,13 @@ def cli() -> None:
     is_flag=True,
     help="Whether to use potentials for steering. Default is False.",
 )
+
+@click.option(
+    "--protein_ligand_mode",
+    is_flag=True,
+    help="Whether to use protein protein module for binding affinity predictions. Default is False.",
+)
+
 @click.option(
     "--model",
     default="boltz2",
@@ -1078,6 +1085,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     num_subsampled_msa: int = 1024,
     no_kernels: bool = False,
     write_embeddings: bool = False,
+    protein_ligand_mode: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1397,22 +1405,32 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         steering_args.contact_guidance_update = False
 
         if model == "boltz2":
-            model_cls = Boltz2
+            model_module = Boltz2.load_from_checkpoint(
+                affinity_checkpoint,
+                strict=True,
+                predict_args=predict_affinity_args,
+                map_location="cpu",
+                diffusion_process_args=asdict(diffusion_params),
+                ema=False,
+                pairformer_args=asdict(pairformer_args),
+                msa_args=asdict(msa_args),
+                steering_args=asdict(steering_args),
+                affinity_mw_correction=affinity_mw_correction,
+            )
         if model == "boltz2_pc":
-            model_cls = Boltz2_pc
-        
-        model_module = model_cls.load_from_checkpoint(
-            affinity_checkpoint,
-            strict=True,
-            predict_args=predict_affinity_args,
-            map_location="cpu",
-            diffusion_process_args=asdict(diffusion_params),
-            ema=False,
-            pairformer_args=asdict(pairformer_args),
-            msa_args=asdict(msa_args),
-            steering_args=asdict(steering_args),
-            affinity_mw_correction=affinity_mw_correction,
-        )
+            model_module = Boltz2_pc.load_from_checkpoint(
+                affinity_checkpoint,
+                strict=True,
+                predict_args=predict_affinity_args,
+                map_location="cpu",
+                diffusion_process_args=asdict(diffusion_params),
+                ema=False,
+                pairformer_args=asdict(pairformer_args),
+                msa_args=asdict(msa_args),
+                steering_args=asdict(steering_args),
+                affinity_mw_correction=affinity_mw_correction,
+                protein_ligand_mode = protein_ligand_mode,
+            )
         model_module.eval()
 
         trainer.callbacks[0] = pred_writer

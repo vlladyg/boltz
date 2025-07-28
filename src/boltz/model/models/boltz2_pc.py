@@ -19,7 +19,7 @@ from boltz.model.loss.confidencev2 import (
     confidence_loss,
 )
 from boltz.model.loss.distogramv2 import distogram_loss
-from boltz.model.modules.affinity import AffinityModule
+from boltz.model.modules.affinity_protein import ProteinProteinAffinityModule
 from boltz.model.modules.confidencev2 import ConfidenceModule
 from boltz.model.modules.diffusion_conditioning import DiffusionConditioning
 from boltz.model.modules.diffusionv2 import AtomDiffusion
@@ -38,7 +38,12 @@ from boltz.model.optim.scheduler import AlphaFoldLRScheduler
 
 
 class Boltz2_pc(LightningModule):
-    """Boltz2 model."""
+    """
+    Boltz2 model with protein-protein affinity support.
+    
+    This extends the original Boltz2 model to support protein-protein binding
+    affinity prediction while maintaining full compatibility with existing weights.
+    """
 
     def __init__(
         self,
@@ -67,6 +72,7 @@ class Boltz2_pc(LightningModule):
         affinity_prediction: bool = False,
         affinity_ensemble: bool = False,
         affinity_mw_correction: bool = True,
+        protein_ligand_mode: bool = False,  # New parameter for protein-protein mode
         run_trunk_and_structure: bool = True,
         skip_run_structure: bool = False,
         token_level_confidence: bool = True,
@@ -105,8 +111,20 @@ class Boltz2_pc(LightningModule):
         use_templates_v2: bool = False,
         use_kernels: bool = False,
     ) -> None:
+        """
+        Initialize the protein-protein Boltz2 model.
+        
+        Parameters
+        ----------
+        protein_ligand_mode : bool
+            Whether to use protein-ligand mode for protein-protein complexes
+        """
         super().__init__()
         self.save_hyperparameters(ignore=["validators"])
+
+
+        # Store protein-protein specific settings
+        self.protein_ligand_mode = protein_ligand_mode
 
         # No random recycling
         self.no_random_recycling_training = no_random_recycling_training
@@ -176,7 +194,12 @@ class Boltz2_pc(LightningModule):
             "use_residue_feats_atoms": use_residue_feats_atoms,
             **embedder_args,
         }
+        
         self.input_embedder = InputEmbedder(**full_embedder_args)
+
+        self.s_init = nn.Linear(token_s, token_s, bias=False)
+        self.z_init_1 = nn.Linear(token_s, token_z, bias=False)
+        self.z_init_2 = nn.Linear(token_s, token_z, bias=False)
 
         self.s_init = nn.Linear(token_s, token_s, bias=False)
         self.z_init_1 = nn.Linear(token_s, token_z, bias=False)
@@ -187,6 +210,7 @@ class Boltz2_pc(LightningModule):
         )
 
         self.token_bonds = nn.Linear(1, token_z, bias=False)
+
         self.bond_type_feature = bond_type_feature
         if bond_type_feature:
             self.token_bonds_type = nn.Embedding(len(const.bond_types) + 1, token_z)
@@ -318,16 +342,20 @@ class Boltz2_pc(LightningModule):
                     self.confidence_module, dynamic=False, fullgraph=False
                 )
 
+        # Initialize protein-protein affinity modules
         if self.affinity_prediction:
             if self.affinity_ensemble:
-                self.affinity_module1 = AffinityModule(
+                # Use protein-protein affinity modules for ensemble
+                self.affinity_module1 = ProteinProteinAffinityModule(
                     token_s,
                     token_z,
+                    protein_ligand_mode,
                     **affinity_model_args1,
                 )
-                self.affinity_module2 = AffinityModule(
+                self.affinity_module2 = ProteinProteinAffinityModule(
                     token_s,
                     token_z,
+                    protein_ligand_mode,
                     **affinity_model_args2,
                 )
                 if compile_affinity:
@@ -338,10 +366,13 @@ class Boltz2_pc(LightningModule):
                         self.affinity_module2, dynamic=False, fullgraph=False
                     )
             else:
-                self.affinity_module = AffinityModule(
+                # Use protein-protein affinity module for single model
+                self.affinity_module = ProteinProteinAffinityModule(
                     token_s,
                     token_z,
+                    protein_ligand_mode,
                     **affinity_model_args,
+
                 )
                 if compile_affinity:
                     self.affinity_module = torch.compile(
@@ -408,7 +439,12 @@ class Boltz2_pc(LightningModule):
         max_parallel_samples: Optional[int] = None,
         run_confidence_sequentially: bool = False,
     ) -> dict[str, Tensor]:
-        print("We are using boltz2_pc here!!!")
+        """
+        Forward pass with protein-protein support.
+        
+        This maintains the same interface as the original Boltz2 model
+        while adding protein-protein specific functionality.
+        """
         with torch.set_grad_enabled(
             self.training and self.structure_prediction_training
         ):
@@ -496,6 +532,7 @@ class Boltz2_pc(LightningModule):
                 "z": z,
             }
 
+            # Structure prediction (same as original)
             if (
                 self.run_trunk_and_structure
                 and ((not self.training) or self.confidence_prediction)
@@ -606,121 +643,165 @@ class Boltz2_pc(LightningModule):
                 )
             )
 
+        # Affinity prediction with protein-protein support
         if self.affinity_prediction:
-            pad_token_mask = feats["token_pad_mask"][0]
-            rec_mask = feats["mol_type"][0] == 0
-            rec_mask = rec_mask * pad_token_mask
-            lig_mask = feats["affinity_token_mask"][0].to(torch.bool)
-            lig_mask = lig_mask * pad_token_mask
-            cross_pair_mask = (
-                lig_mask[:, None] * rec_mask[None, :]
-                + rec_mask[:, None] * lig_mask[None, :]
-                + lig_mask[:, None] * lig_mask[None, :]
+            dict_out.update(
+                self._run_affinity_prediction(feats, s_inputs, z, dict_out)
             )
-            z_affinity = z * cross_pair_mask[None, :, :, None]
 
-            argsort = torch.argsort(dict_out["iptm"], descending=True)
-            best_idx = argsort[0].item()
-            coords_affinity = dict_out["sample_atom_coords"].detach()[best_idx][
-                None, None
-            ]
-            s_inputs = self.input_embedder(feats, affinity=True)
+        return dict_out
 
-            with torch.autocast("cuda", enabled=False):
-                if self.affinity_ensemble:
-                    dict_out_affinity1 = self.affinity_module1(
-                        s_inputs=s_inputs.detach(),
-                        z=z_affinity.detach(),
-                        x_pred=coords_affinity,
-                        feats=feats,
-                        multiplicity=1,
-                        use_kernels=self.use_kernels,
+    def _run_affinity_prediction(
+        self,
+        feats: dict[str, Tensor],
+        s_inputs: Tensor,
+        z: Tensor,
+        dict_out: dict[str, Tensor],
+    ) -> dict[str, Tensor]:
+        """
+        Run affinity prediction with protein-protein support.
+        
+        This extends the original affinity prediction to handle protein-protein
+        complexes while maintaining compatibility with small molecule ligands.
+        """
+        # Get the best structure for affinity prediction
+        argsort = torch.argsort(dict_out["iptm"], descending=True)
+        best_idx = argsort[0].item()
+        coords_affinity = dict_out["sample_atom_coords"].detach()[best_idx][
+            None, None
+        ]
+
+        # Get sequence inputs for affinity
+        s_inputs_affinity = self.input_embedder(feats, affinity=True)
+        z_affinity = z.detach()
+
+        # Run affinity prediction
+        with torch.autocast("cuda", enabled=False):
+            if self.affinity_ensemble:
+                # Ensemble prediction
+                dict_out_affinity1 = self.affinity_module1(
+                    s_inputs=s_inputs_affinity.detach(),
+                    z=z_affinity.detach(),
+                    x_pred=coords_affinity,
+                    feats=feats,
+                    multiplicity=1,
+                    use_kernels=self.use_kernels,
+                )
+
+                dict_out_affinity1["affinity_probability_binary"] = (
+                    torch.nn.functional.sigmoid(
+                        dict_out_affinity1["affinity_logits_binary"]
                     )
+                )
 
-                    dict_out_affinity1["affinity_probability_binary"] = (
-                        torch.nn.functional.sigmoid(
-                            dict_out_affinity1["affinity_logits_binary"]
-                        )
-                    )
-                    dict_out_affinity2 = self.affinity_module2(
-                        s_inputs=s_inputs.detach(),
-                        z=z_affinity.detach(),
-                        x_pred=coords_affinity,
-                        feats=feats,
-                        multiplicity=1,
-                        use_kernels=self.use_kernels,
-                    )
-                    dict_out_affinity2["affinity_probability_binary"] = (
-                        torch.nn.functional.sigmoid(
-                            dict_out_affinity2["affinity_logits_binary"]
-                        )
-                    )
+                dict_out_affinity2 = self.affinity_module2(
+                    s_inputs=s_inputs_affinity.detach(),
+                    z=z_affinity.detach(),
+                    x_pred=coords_affinity,
+                    feats=feats,
+                    multiplicity=1,
+                    use_kernels=self.use_kernels,
+                )
 
-                    dict_out_affinity_ensemble = {
-                        "affinity_pred_value": (
-                            dict_out_affinity1["affinity_pred_value"]
-                            + dict_out_affinity2["affinity_pred_value"]
-                        )
-                        / 2,
-                        "affinity_probability_binary": (
-                            dict_out_affinity1["affinity_probability_binary"]
-                            + dict_out_affinity2["affinity_probability_binary"]
-                        )
-                        / 2,
-                    }
+                dict_out_affinity2["affinity_probability_binary"] = (
+                    torch.nn.functional.sigmoid(
+                        dict_out_affinity2["affinity_logits_binary"]
+                    )
+                )
 
-                    dict_out_affinity1 = {
+                # Ensemble the predictions
+                dict_out_affinity_ensemble = {
+                    "affinity_pred_value": (
+                        dict_out_affinity1["affinity_pred_value"]
+                        + dict_out_affinity2["affinity_pred_value"]
+                    )
+                    / 2,
+                    "affinity_probability_binary": (
+                        dict_out_affinity1["affinity_probability_binary"]
+                        + dict_out_affinity2["affinity_probability_binary"]
+                    )
+                    / 2,
+                }
+
+                dict_out_affinity1 = {
                         "affinity_pred_value1": dict_out_affinity1[
                             "affinity_pred_value"
                         ],
                         "affinity_probability_binary1": dict_out_affinity1[
                             "affinity_probability_binary"
                         ],
-                    }
-                    dict_out_affinity2 = {
-                        "affinity_pred_value2": dict_out_affinity2[
-                            "affinity_pred_value"
-                        ],
-                        "affinity_probability_binary2": dict_out_affinity2[
-                            "affinity_probability_binary"
-                        ],
-                    }
-                    if self.affinity_mw_correction:
-                        model_coef = 1.03525938
-                        mw_coef = -0.59992683
-                        bias = 2.83288489
-                        mw = feats["affinity_mw"][0] ** 0.3
-                        dict_out_affinity_ensemble["affinity_pred_value"] = (
-                            model_coef
-                            * dict_out_affinity_ensemble["affinity_pred_value"]
-                            + mw_coef * mw
-                            + bias
-                        )
+                }
+                
+                dict_out_affinity2 = {
+                    "affinity_pred_value2": dict_out_affinity2[
+                        "affinity_pred_value"
+                    ],
+                    "affinity_probability_binary2": dict_out_affinity2[
+                        "affinity_probability_binary"
+                    ],
+                }
+                
+                # Add protein-specific predictions if available
+                """
+                if self.protein_ligand_mode:
+                    if "protein_affinity_value" in dict_out_affinity1:
+                        dict_out_affinity_ensemble["protein_affinity_value"] = (
+                            dict_out_affinity1.get("protein_affinity_value", torch.zeros(1))
+                            + dict_out_affinity2.get("protein_affinity_value", torch.zeros(1))
+                        ) / 2
+                    
+                    if "protein_binding_probability" in dict_out_affinity1:
+                        dict_out_affinity_ensemble["protein_binding_probability"] = (
+                            dict_out_affinity1.get("protein_binding_probability", torch.zeros(1))
+                            + dict_out_affinity2.get("protein_binding_probability", torch.zeros(1))
+                        ) / 2
+                """
 
-                    dict_out.update(dict_out_affinity_ensemble)
-                    dict_out.update(dict_out_affinity1)
-                    dict_out.update(dict_out_affinity2)
-                else:
-                    dict_out_affinity = self.affinity_module(
-                        s_inputs=s_inputs.detach(),
-                        z=z_affinity.detach(),
-                        x_pred=coords_affinity,
-                        feats=feats,
-                        multiplicity=1,
-                        use_kernels=self.use_kernels,
-                    )
-                    dict_out.update(
-                        {
-                            "affinity_pred_value": dict_out_affinity[
-                                "affinity_pred_value"
-                            ],
-                            "affinity_probability_binary": torch.nn.functional.sigmoid(
-                                dict_out_affinity["affinity_logits_binary"]
-                            ),
-                        }
+                # Apply molecular weight correction if enabled
+                if self.affinity_mw_correction and "affinity_mw" in feats:
+                    model_coef = 1.03525938
+                    mw_coef = -0.59992683
+                    bias = 2.83288489
+                    mw = feats["affinity_mw"][0] ** 0.3
+                    dict_out_affinity_ensemble["affinity_pred_value"] = (
+                        model_coef
+                        * dict_out_affinity_ensemble["affinity_pred_value"]
+                        + mw_coef * mw
+                        + bias
                     )
 
-        return dict_out
+                dict_out_affinity_ensemble.update(dict_out_affinity1)
+                dict_out_affinity_ensemble.update(dict_out_affinity2)
+                return dict_out_affinity_ensemble
+
+            else:
+                # Single model prediction
+                dict_out_affinity = self.affinity_module(
+                    s_inputs=s_inputs_affinity.detach(),
+                    z=z_affinity.detach(),
+                    x_pred=coords_affinity,
+                    feats=feats,
+                    multiplicity=1,
+                    use_kernels=self.use_kernels,
+                )
+
+                result = {
+                    "affinity_pred_value": dict_out_affinity["affinity_pred_value"],
+                    "affinity_probability_binary": torch.nn.functional.sigmoid(
+                        dict_out_affinity["affinity_logits_binary"]
+                    ),
+                }
+
+                # Add protein-specific predictions if available
+                """
+                if self.protein_ligand_mode:
+                    if "protein_affinity_value" in dict_out_affinity:
+                        result["protein_affinity_value"] = dict_out_affinity["protein_affinity_value"]
+                    
+                    if "protein_binding_probability" in dict_out_affinity:
+                        result["protein_binding_probability"] = dict_out_affinity["protein_binding_probability"]
+                """
+                return result
 
     def get_true_coordinates(
         self,
@@ -1130,6 +1211,8 @@ class Boltz2_pc(LightningModule):
             else:
                 raise e
 
+
+
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Configure the optimizer."""
         param_dict = dict(self.named_parameters())
@@ -1254,3 +1337,49 @@ class Boltz2_pc(LightningModule):
 
         """
         return [EMA(self.ema_decay)] if self.use_ema else []
+
+
+
+def create_boltz2_pc_model(
+    atom_s: int = 384,
+    atom_z: int = 128,
+    token_s: int = 384,
+    token_z: int = 128,
+    num_bins: int = 64,
+    protein_ligand_mode: bool = True,
+    **kwargs
+) -> Boltz2_pc:
+    """
+    Factory function to create a protein-protein Boltz2 model.
+    
+    Parameters
+    ----------
+    atom_s : int
+        Atom sequence dimension
+    atom_z : int
+        Atom pairwise dimension
+    token_s : int
+        Token sequence dimension
+    token_z : int
+        Token pairwise dimension
+    num_bins : int
+        Number of distance bins
+    protein_ligand_mode : bool
+        Whether to use protein-ligand mode
+    **kwargs
+        Additional arguments
+        
+    Returns
+    -------
+    Boltz2ProteinProtein
+        Configured model
+    """
+    return Boltz2_pc(
+        atom_s=atom_s,
+        atom_z=atom_z,
+        token_s=token_s,
+        token_z=token_z,
+        num_bins=num_bins,
+        protein_ligand_mode=protein_ligand_mode,
+        **kwargs
+    ) 
