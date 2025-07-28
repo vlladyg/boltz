@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from boltz.data import const
 from boltz.data.crop.affinity import AffinityCropper
+from boltz.data.crop.affinity_protein import ProteinProteinAffinityCropper
 from boltz.data.feature.featurizerv2 import Boltz2Featurizer
 from boltz.data.feature.protein_protein_featurizer import ProteinProteinFeaturizer
 from boltz.data.mol import load_canonicals, load_molecules
@@ -461,7 +462,7 @@ class PredictionDataset_pc(PredictionDataset):
             affinity=affinity,
         )
         self.featurizer = ProteinProteinFeaturizer()
-
+        self.cropper = ProteinProteinAffinityCropper()
 
 class Boltz2InferenceDataModule_pc(Boltz2InferenceDataModule):
     """DataModule for Boltz2 inference."""
