@@ -45,7 +45,7 @@ class ProteinProteinAffinityModule(AffinityModule):
     def _detect_protein_ligand_mode(self, feats: Dict[str, torch.Tensor]) -> bool:
         """Detect if we're dealing with protein-protein complexes based on features."""
         has_receptor_mask = "receptor_mask" in feats
-        has_ligand_mask = "ligand_mask" in feats
+        has_binder_mask = "binder_mask" in feats
         has_interface_mask = "interface_mask" in feats
         
         if "mol_type" in feats:
@@ -56,7 +56,7 @@ class ProteinProteinAffinityModule(AffinityModule):
             if protein_ratio > 0.5:
                 return True
         
-        return has_receptor_mask or has_ligand_mask or has_interface_mask
+        return has_receptor_mask or has_binder_mask or has_interface_mask
 
     def _create_protein_protein_masks(
         self, 
@@ -66,37 +66,37 @@ class ProteinProteinAffinityModule(AffinityModule):
         """Create masks for protein-protein interactions."""
         pad_token_mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)
         
-        if "receptor_mask" in feats and "ligand_mask" in feats:
+        if "receptor_mask" in feats and "binder_mask" in feats:
             rec_mask = feats["receptor_mask"].repeat_interleave(multiplicity, 0)
-            lig_mask = feats["ligand_mask"].repeat_interleave(multiplicity, 0)
+            binder_mask = feats["binder_mask"].repeat_interleave(multiplicity, 0)
         else:
             rec_mask = (feats["mol_type"] == 0).repeat_interleave(multiplicity, 0)
-            lig_mask = (
+            binder_mask = (
                 feats["affinity_token_mask"]
                 .repeat_interleave(multiplicity, 0)
                 .to(torch.bool)
             )
         
         rec_mask = rec_mask * pad_token_mask
-        lig_mask = lig_mask * pad_token_mask
+        binder_mask = binder_mask * pad_token_mask
         
-        return pad_token_mask, rec_mask, lig_mask
+        return pad_token_mask, rec_mask, binder_mask
 
     def _create_cross_pair_mask(
         self, 
         rec_mask: torch.Tensor, 
-        lig_mask: torch.Tensor,
-        include_ligand_ligand: bool = True
+        binder_mask: torch.Tensor,
+        include_binder_binder: bool = True
     ) -> torch.Tensor:
         """Create cross-pair mask for protein-protein interactions."""
         cross_pair_mask = (
-            lig_mask[:, :, None] * rec_mask[:, None, :]
-            + rec_mask[:, :, None] * lig_mask[:, None, :]
+            binder_mask[:, :, None] * rec_mask[:, None, :]
+            + rec_mask[:, :, None] * binder_mask[:, None, :]
         )
         
-        if include_ligand_ligand:
+        if include_binder_binder:
             cross_pair_mask = cross_pair_mask + (
-                lig_mask[:, :, None] * lig_mask[:, None, :]
+                binder_mask[:, :, None] * binder_mask[:, None, :]
             )
         
         return cross_pair_mask
@@ -150,23 +150,23 @@ class ProteinProteinAffinityModule(AffinityModule):
 
         # Create masks based on mode
         if self.protein_ligand_mode:
-            pad_token_mask, rec_mask, lig_mask = self._create_protein_protein_masks(feats, multiplicity)
-            cross_pair_mask = self._create_cross_pair_mask(rec_mask, lig_mask)
+            pad_token_mask, rec_mask, binder_mask = self._create_protein_protein_masks(feats, multiplicity)
+            cross_pair_mask = self._create_cross_pair_mask(rec_mask, binder_mask)
         else:
             # Original small molecule logic
             pad_token_mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)
             rec_mask = (feats["mol_type"] == 0).repeat_interleave(multiplicity, 0)
             rec_mask = rec_mask * pad_token_mask
-            lig_mask = (
+            binder_mask = (
                 feats["affinity_token_mask"]
                 .repeat_interleave(multiplicity, 0)
                 .to(torch.bool)
             )
-            lig_mask = lig_mask * pad_token_mask
+            binder_mask = binder_mask * pad_token_mask
             cross_pair_mask = (
-                lig_mask[:, :, None] * rec_mask[:, None, :]
-                + rec_mask[:, :, None] * lig_mask[:, None, :]
-                + lig_mask[:, :, None] * lig_mask[:, None, :]
+                binder_mask[:, :, None] * rec_mask[:, None, :]
+                + rec_mask[:, :, None] * binder_mask[:, None, :]
+                + binder_mask[:, :, None] * binder_mask[:, None, :]
             )
 
         # Process through pairformer (original)
