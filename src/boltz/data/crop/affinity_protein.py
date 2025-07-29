@@ -77,7 +77,7 @@ class ProteinProteinAffinityCropper(Cropper):
         
         receptor_interface_indices = np.where(receptor_interface_mask)[0]
         binder_interface_indices = np.where(binder_interface_mask)[0]
-        
+
         return receptor_interface_indices, binder_interface_indices
 
     def crop(
@@ -120,7 +120,6 @@ class ProteinProteinAffinityCropper(Cropper):
             (valid_tokens["mol_type"] == const.chain_type_ids["PROTEIN"])
         ]
 
-        print("Valid Tockens keys", valid_tokens.keys()) 
         if not binder_tokens.size or not receptor_tokens.size:
             msg = "Need both receptor and binder proteins for protein-protein cropping"
             raise ValueError(msg)
@@ -215,7 +214,7 @@ class ProteinProteinAffinityCropper(Cropper):
         indices = token_data["token_idx"]
         token_bonds = token_bonds[np.isin(token_bonds["token_1"], indices)]
         token_bonds = token_bonds[np.isin(token_bonds["token_2"], indices)]
-
+        
         return replace(data, tokens=token_data, bonds=token_bonds)
 
     def _get_token_neighborhood(self, query_token: np.ndarray, chain_tokens: np.ndarray) -> np.ndarray:
