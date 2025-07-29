@@ -223,8 +223,8 @@ class ProteinProteinAffinityCropper(Cropper):
             return chain_tokens
         
         # Build residue-index window around query token
-        min_idx = query_token["res_idx"] - self.neighborhood_size
-        max_idx = query_token["res_idx"] + self.neighborhood_size
+        min_idx = query_token["res_idx"] - self.neighborhood_size // 2
+        max_idx = query_token["res_idx"] + self.neighborhood_size // 2
         
         # Start with query token
         tokens = chain_tokens[chain_tokens["res_idx"] == query_token["res_idx"]]
