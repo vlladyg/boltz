@@ -286,6 +286,11 @@ class EnsembleProteinAffinityModule():
             else:
                 uncertainty = torch.zeros_like(avg_prediction)
             
+            # Also return per-residue affinity values and probabilities
+            binder_affinity_values = torch.stack(ensemble_predictions)           # [num_members, batch, 1]
+            binder_affinity_probabilities = torch.stack(ensemble_probabilities) # [num_members, batch, 1]
+            binder_indices = ensemble_indices
+
             return {
                 "affinity_pred_value": avg_prediction,
                 "affinity_logits_binary": avg_logits,
@@ -293,6 +298,9 @@ class EnsembleProteinAffinityModule():
                 "ensemble_uncertainty": uncertainty,
                 "ensemble_size": torch.tensor(len(ensemble_predictions), dtype=torch.long),
                 "ensemble_residue_indices": ensemble_indices,
+                "binder_affinity_values": binder_affinity_values,
+                "binder_affinity_probabilities": binder_affinity_probabilities,
+                "binder_residue_indices": binder_indices,
             }
         else:
             # Fallback if no ensemble members
@@ -305,6 +313,9 @@ class EnsembleProteinAffinityModule():
                 "ensemble_uncertainty": torch.zeros((batch_size, 1), device=device),
                 "ensemble_size": torch.tensor(0, dtype=torch.long),
                 "ensemble_residue_indices": torch.tensor([], dtype=torch.long),
+                "binder_affinity_values": torch.zeros((0, batch_size, 1), device=device),
+                "binder_affinity_probabilities": torch.zeros((0, batch_size, 1), device=device),
+                "binder_residue_indices": torch.tensor([], dtype=torch.long),
             }
 
 

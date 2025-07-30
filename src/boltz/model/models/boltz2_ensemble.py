@@ -727,6 +727,22 @@ class Boltz2Ensemble(LightningModule):
                     dict_out.update(dict_out_affinity_ensemble)
                     dict_out.update(dict_out_affinity1)
                     dict_out.update(dict_out_affinity2)
+                    # Also save per-residue binder token outputs for dual-model ensemble
+                    binder_affinity_values = (
+                        dict_out_affinity1["affinity_pred_value1"] 
+                        + dict_out_affinity2["affinity_pred_value2"]
+                    ) / 2
+                    binder_affinity_probabilities = (
+                        dict_out_affinity1["affinity_probability_binary1"]
+                        + dict_out_affinity2["affinity_probability_binary2"]
+                    ) / 2
+                    # Use binder indices from first model
+                    binder_residue_indices = dict_out_affinity1.get("binder_residue_indices")
+                    dict_out["binder_affinity_values"] = binder_affinity_values
+                    dict_out["binder_affinity_probabilities"] = binder_affinity_probabilities
+                    dict_out["binder_residue_indices"] = binder_residue_indices
+
+
                 else:
                     # Use single ensemble module for protein-protein affinity
                     dict_out_affinity = self.affinity_module_ensemble.forward(
@@ -761,6 +777,10 @@ class Boltz2Ensemble(LightningModule):
                         )
 
                     dict_out.update(result)
+                    # Also save per-residue binder token outputs
+                    dict_out["binder_affinity_values"] = dict_out_affinity["binder_affinity_values"]
+                    dict_out["binder_affinity_probabilities"] = dict_out_affinity["binder_affinity_probabilities"]
+                    dict_out["binder_residue_indices"] = dict_out_affinity["binder_residue_indices"]
 
         return dict_out
 
@@ -1155,6 +1175,11 @@ class Boltz2Ensemble(LightningModule):
                 pred_dict["affinity_probability_binary"] = out[
                     "affinity_probability_binary"
                 ]
+
+                pred_dict["binder_affinity_values"] = out["binder_affinity_values"]
+                pred_dict["binder_affinity_probabilities"] = out["binder_affinity_probabilities"]
+                pred_dict["binder_residue_indices"] = out["binder_residue_indices"]
+                
                 if self.affinity_ensemble:
                     pred_dict["affinity_pred_value1"] = out["affinity_pred_value1"]
                     pred_dict["affinity_probability_binary1"] = out[
@@ -1164,6 +1189,8 @@ class Boltz2Ensemble(LightningModule):
                     pred_dict["affinity_probability_binary2"] = out[
                         "affinity_probability_binary2"
                     ]
+
+
             return pred_dict
 
         except RuntimeError as e:  # catch out of memory exceptions

@@ -311,6 +311,15 @@ class BoltzAffinityWriter(BasePredictionWriter):
             "affinity_pred_value": pred_affinity_value.item(),
             "affinity_probability_binary": pred_affinity_probability.item(),
         }
+
+        if "binder_affinity_values" in prediction:
+            binder_affinity_values = prediction["binder_affinity_values"]
+            binder_affinity_probabilities = prediction["binder_affinity_probabilities"]
+            binder_residue_indices = prediction["binder_residue_indices"]
+            affinity_summary["binder_affinity_values"] = binder_affinity_values.item()
+            affinity_summary["binder_affinity_probabilities"] = binder_affinity_probabilities.item()
+            affinity_summary["binder_residue_indices"] = binder_residue_indices.item()
+
         if "affinity_pred_value1" in prediction:
             pred_affinity_value1 = prediction["affinity_pred_value1"]
             pred_affinity_probability1 = prediction["affinity_probability_binary1"]

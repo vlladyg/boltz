@@ -174,13 +174,15 @@ class ProteinProteinFeaturizer(Boltz2Featurizer):
         receptor_tokens = sum(1 for token in data.tokens if token["asym_id"] in receptor_chain_ids)
         binder_tokens = sum(1 for token in data.tokens if token["asym_id"] in binder_chain_ids)
         
-        # Approximate MW calculation (assuming ~110 Da per residue)
-        receptor_mw = receptor_tokens * 110.0
-        binder_mw = binder_tokens * 110.0
+        # Approximate MW calculation (assuming ~110 Da per residue with removed hydrogens                           )
+        receptor_mw = receptor_tokens * 100.0
+        binder_mw = binder_tokens * 100.0
         
         features["receptor_mw"] = torch.tensor(receptor_mw, dtype=torch.float)
         features["binder_mw"] = torch.tensor(binder_mw, dtype=torch.float)
         
+        features["affinity_mw"] = torch.tensor(100.0, dtype=torch.float)
+
         # Complex size features for affinity normalization
         total_interface_size = receptor_tokens + binder_tokens
         features["interface_size"] = torch.tensor(total_interface_size, dtype=torch.float)
