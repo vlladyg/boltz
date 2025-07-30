@@ -651,7 +651,7 @@ class Boltz2Ensemble(LightningModule):
             with torch.autocast("cuda", enabled=False):
                 if self.affinity_ensemble:
                     # Use ensemble modules for protein-protein affinity
-                    dict_out_affinity1 = self.affinity_module_ensemble1(
+                    dict_out_affinity1 = self.affinity_module_ensemble1.forward(
                         s_inputs=s_inputs.detach(),
                         z=z.detach(),
                         x_pred=coords_affinity,
@@ -660,7 +660,7 @@ class Boltz2Ensemble(LightningModule):
                         use_kernels=self.use_kernels,
                     )
 
-                    dict_out_affinity2 = self.affinity_module_ensemble2(
+                    dict_out_affinity2 = self.affinity_module_ensemble2.forward(
                         s_inputs=s_inputs.detach(),
                         z=z.detach(),
                         x_pred=coords_affinity,
@@ -729,7 +729,7 @@ class Boltz2Ensemble(LightningModule):
                     dict_out.update(dict_out_affinity2)
                 else:
                     # Use single ensemble module for protein-protein affinity
-                    dict_out_affinity = self.affinity_module_ensemble(
+                    dict_out_affinity = self.affinity_module_ensemble.forward(
                         s_inputs=s_inputs.detach(),
                         z=z.detach(),
                         x_pred=coords_affinity,
@@ -1149,6 +1149,9 @@ class Boltz2Ensemble(LightningModule):
                     pred_dict["pair_chains_iptm"] = out["pair_chains_iptm"]
             if self.affinity_prediction:
                 pred_dict["affinity_pred_value"] = out["affinity_pred_value"]
+                pred_dict["affinity_probability_binary"] = out[
+                    "affinity_probability_binary"
+                ]
                 pred_dict["affinity_probability_binary"] = out[
                     "affinity_probability_binary"
                 ]

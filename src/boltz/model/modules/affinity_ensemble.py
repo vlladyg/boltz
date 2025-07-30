@@ -7,7 +7,7 @@ from boltz.data import const
 from boltz.model.modules.affinity import AffinityModule
 
 
-class EnsembleProteinAffinityModule(nn.Module):
+class EnsembleProteinAffinityModule():
     """
     Ensemble-based protein-protein affinity prediction module.
     
@@ -23,6 +23,7 @@ class EnsembleProteinAffinityModule(nn.Module):
         ensemble_sampling_strategy: str = "top_k",  # "random", "top_k", "all"
         max_ensemble_size: int = 20,
         min_ensemble_size: int = 5,
+        **kwargs
     ):
         """
         Initialize the ensemble protein affinity module.
@@ -62,7 +63,8 @@ class EnsembleProteinAffinityModule(nn.Module):
             Indices of binder residues
         """
         affinity_mask = feats["affinity_token_mask"]
-        binder_indices = torch.where(affinity_mask > 0)[0]
+        
+        binder_indices = torch.where(affinity_mask[0] > 0)[0]
         return binder_indices
 
     def _select_ensemble_residues(
@@ -70,6 +72,7 @@ class EnsembleProteinAffinityModule(nn.Module):
         binder_indices: torch.Tensor,
         feats: Dict[str, torch.Tensor],
         x_pred: torch.Tensor,
+        multiplicity: int = 1,
     ) -> torch.Tensor:
         """
         Select which binder residues to include in the ensemble.
@@ -109,8 +112,8 @@ class EnsembleProteinAffinityModule(nn.Module):
         
         elif self.ensemble_sampling_strategy == "top_k":
             # Select residues based on distance to receptor center
-            receptor_mask = feats["mol_type"] == const.chain_type_ids["PROTEIN"]
-            receptor_mask = receptor_mask & (feats["affinity_token_mask"] == 0)
+            
+            receptor_mask = feats["receptor_mask"].to(torch.bool)
             
             if receptor_mask.sum() == 0:
                 # Fallback to random if no receptor found
@@ -119,26 +122,24 @@ class EnsembleProteinAffinityModule(nn.Module):
             
             # Convert atom coordinates to token center coordinates
             token_to_rep_atom = feats["token_to_rep_atom"]
-            
-            # Handle different x_pred shapes
+            token_to_rep_atom = feats["token_to_rep_atom"]
+            token_to_rep_atom = token_to_rep_atom.repeat_interleave(multiplicity, 0)
             if len(x_pred.shape) == 4:
-                # Shape: [batch, multiplicity, atoms, 3] -> use first sample
-                x_pred_atoms = x_pred[0, 0]  # [atoms, 3]
-            elif len(x_pred.shape) == 3:
-                # Shape: [batch*multiplicity, atoms, 3] -> use first batch
-                x_pred_atoms = x_pred[0]  # [atoms, 3]
+                B, mult, N, _ = x_pred.shape
+                x_pred = x_pred.reshape(B * mult, N, -1)
             else:
-                # Shape: [atoms, 3]
-                x_pred_atoms = x_pred
+                BM, N, _ = x_pred.shape
+                B = BM // multiplicity
+                mult = multiplicity
             
             # Get token center coordinates using representative atom mapping
             token_coords = torch.bmm(
-                token_to_rep_atom[None].float(), 
-                x_pred_atoms[None]
+                token_to_rep_atom.float(), 
+                x_pred
             )[0]  # [tokens, 3]
             
             # Get receptor and binder coordinates
-            receptor_indices = torch.where(receptor_mask)[0]
+            receptor_indices = torch.where(receptor_mask[0] > 0)[0]
             receptor_coords = token_coords[receptor_indices]
             binder_coords = token_coords[binder_indices]
             
@@ -180,12 +181,12 @@ class EnsembleProteinAffinityModule(nn.Module):
         
         # Create new affinity mask with only one residue active
         new_affinity_mask = torch.zeros_like(feats["affinity_token_mask"])
-        new_affinity_mask[residue_idx] = 1.0
+        new_affinity_mask[0, residue_idx] = 1.0
         single_residue_feats["affinity_token_mask"] = new_affinity_mask
         
         # Update mol_type to mark this residue as NONPOLYMER (ligand-like)
         new_mol_type = feats["mol_type"].clone()
-        new_mol_type[residue_idx] = const.chain_type_ids["NONPOLYMER"]
+        #new_mol_type[0, residue_idx] = const.chain_type_ids["NONPOLYMER"]
         single_residue_feats["mol_type"] = new_mol_type
         
         return single_residue_feats
@@ -226,21 +227,21 @@ class EnsembleProteinAffinityModule(nn.Module):
         binder_indices = self._identify_binder_residues(feats)
         
         # Select ensemble residues
-        ensemble_indices = self._select_ensemble_residues(binder_indices, feats, x_pred)
+        ensemble_indices = self._select_ensemble_residues(binder_indices, feats, x_pred, multiplicity)
         
         # Collect predictions from each ensemble member
         ensemble_predictions = []
         ensemble_probabilities = []
-        
+
+
+        pad_token_mask = feats["token_pad_mask"][0]
+        rec_mask = feats["receptor_mask"][0].to(torch.bool)
+        rec_mask = rec_mask * pad_token_mask
         for residue_idx in ensemble_indices:
             # Create single-residue features
             single_residue_feats = self._create_single_residue_features(feats, residue_idx.item())
             
             # Create cross_pair_mask for this single residue
-            pad_token_mask = single_residue_feats["token_pad_mask"][0]
-            rec_mask = single_residue_feats["mol_type"] == const.chain_type_ids["PROTEIN"]
-            rec_mask = rec_mask & (single_residue_feats["affinity_token_mask"] == 0)
-            rec_mask = rec_mask * pad_token_mask
             lig_mask = single_residue_feats["affinity_token_mask"][0].to(torch.bool)  # single ligand residue
             lig_mask = lig_mask * pad_token_mask
             
@@ -249,7 +250,7 @@ class EnsembleProteinAffinityModule(nn.Module):
                 + rec_mask[:, None] * lig_mask[None, :]
                 + lig_mask[:, None] * lig_mask[None, :]
             )
-            
+
             # Apply mask to z
             z_masked = z * cross_pair_mask[None, :, :, None]
             
@@ -270,6 +271,8 @@ class EnsembleProteinAffinityModule(nn.Module):
         
         # Ensemble averaging
         if len(ensemble_predictions) > 0:
+            print("Ensemble probablilities")
+            print(ensemble_probabilities)
             # Average predictions and probabilities (following original Boltz2 approach)
             avg_prediction = torch.stack(ensemble_predictions).mean(dim=0)
             avg_probability = torch.stack(ensemble_probabilities).mean(dim=0)
