@@ -237,6 +237,7 @@ class EnsembleProteinAffinityModule():
         pad_token_mask = feats["token_pad_mask"][0]
         rec_mask = feats["receptor_mask"][0].to(torch.bool)
         rec_mask = rec_mask * pad_token_mask
+        
         for residue_idx in ensemble_indices:
             # Create single-residue features
             single_residue_feats = self._create_single_residue_features(feats, residue_idx.item())
@@ -271,8 +272,6 @@ class EnsembleProteinAffinityModule():
         
         # Ensemble averaging
         if len(ensemble_predictions) > 0:
-            print("Ensemble probablilities")
-            print(ensemble_probabilities)
             # Average predictions and probabilities (following original Boltz2 approach)
             avg_prediction = torch.stack(ensemble_predictions).mean(dim=0)
             avg_probability = torch.stack(ensemble_probabilities).mean(dim=0)

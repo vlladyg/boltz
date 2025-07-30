@@ -313,12 +313,12 @@ class BoltzAffinityWriter(BasePredictionWriter):
         }
 
         if "binder_affinity_values" in prediction:
-            binder_affinity_values = prediction["binder_affinity_values"]
-            binder_affinity_probabilities = prediction["binder_affinity_probabilities"]
-            binder_residue_indices = prediction["binder_residue_indices"]
-            affinity_summary["binder_affinity_values"] = binder_affinity_values.item()
-            affinity_summary["binder_affinity_probabilities"] = binder_affinity_probabilities.item()
-            affinity_summary["binder_residue_indices"] = binder_residue_indices.item()
+            binder_residue_indices = [el.item() for el in prediction["binder_residue_indices"]]
+            binder_affinity_values = [el.item() for el in prediction["binder_affinity_values"]]
+            binder_affinity_probabilities = [el.item() for el in prediction["binder_affinity_probabilities"]]
+            affinity_summary["binder_affinity_values"] = dict(sorted(zip(binder_residue_indices, binder_affinity_values)))
+            affinity_summary["binder_affinity_probabilities"] = dict(sorted(zip(binder_residue_indices, binder_affinity_probabilities)))
+            #affinity_summary["binder_affinity_indices"] = sorted()
 
         if "affinity_pred_value1" in prediction:
             pred_affinity_value1 = prediction["affinity_pred_value1"]

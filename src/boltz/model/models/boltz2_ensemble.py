@@ -669,6 +669,7 @@ class Boltz2Ensemble(LightningModule):
                         use_kernels=self.use_kernels,
                     )
 
+                    
                     dict_out_affinity_ensemble = {
                         "affinity_pred_value": (
                             dict_out_affinity1["affinity_pred_value"]
@@ -680,8 +681,18 @@ class Boltz2Ensemble(LightningModule):
                             + dict_out_affinity2["affinity_probability_binary"]
                         )
                         / 2,
+                        "binder_affinity_values": (
+                            dict_out_affinity1["binder_affinity_values"] 
+                            + dict_out_affinity2["binder_affinity_values"]
+                        )[:, 0, 0] / 2,
+                        "binder_affinity_probabilities": (
+                            dict_out_affinity1["binder_affinity_probabilities"]
+                            + dict_out_affinity2["binder_affinity_probabilities"]
+                        )[:, 0, 0] / 2,
+                        "binder_residue_indices": dict_out_affinity1["binder_residue_indices"],
                     }
 
+                    
                     dict_out_affinity1 = {
                         "affinity_pred_value1": dict_out_affinity1[
                             "affinity_pred_value"
@@ -727,20 +738,6 @@ class Boltz2Ensemble(LightningModule):
                     dict_out.update(dict_out_affinity_ensemble)
                     dict_out.update(dict_out_affinity1)
                     dict_out.update(dict_out_affinity2)
-                    # Also save per-residue binder token outputs for dual-model ensemble
-                    binder_affinity_values = (
-                        dict_out_affinity1["affinity_pred_value1"] 
-                        + dict_out_affinity2["affinity_pred_value2"]
-                    ) / 2
-                    binder_affinity_probabilities = (
-                        dict_out_affinity1["affinity_probability_binary1"]
-                        + dict_out_affinity2["affinity_probability_binary2"]
-                    ) / 2
-                    # Use binder indices from first model
-                    binder_residue_indices = dict_out_affinity1.get("binder_residue_indices")
-                    dict_out["binder_affinity_values"] = binder_affinity_values
-                    dict_out["binder_affinity_probabilities"] = binder_affinity_probabilities
-                    dict_out["binder_residue_indices"] = binder_residue_indices
 
 
                 else:
@@ -763,6 +760,9 @@ class Boltz2Ensemble(LightningModule):
                         "ensemble_size": dict_out_affinity.get(
                             "ensemble_size", torch.tensor(0, dtype=torch.long)
                         ),
+                        "binder_affinity_values": dict_out_affinity["binder_affinity_values"][:, 0, 0],
+                        "binder_affinity_probabilities": dict_out_affinity["binder_affinity_probabilities"][:, 0, 0],
+                        "binder_residue_indices": dict_out_affinity["binder_residue_indices"]
                     }
 
                     if self.affinity_mw_correction:
@@ -777,10 +777,6 @@ class Boltz2Ensemble(LightningModule):
                         )
 
                     dict_out.update(result)
-                    # Also save per-residue binder token outputs
-                    dict_out["binder_affinity_values"] = dict_out_affinity["binder_affinity_values"]
-                    dict_out["binder_affinity_probabilities"] = dict_out_affinity["binder_affinity_probabilities"]
-                    dict_out["binder_residue_indices"] = dict_out_affinity["binder_residue_indices"]
 
         return dict_out
 
