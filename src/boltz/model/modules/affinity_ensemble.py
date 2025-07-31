@@ -149,11 +149,39 @@ class EnsembleProteinAffinityModule():
             
             # Select closest residues
             _, closest_indices = torch.topk(min_distances, k=ensemble_size, largest=False)
-            return binder_indices[closest_indices]
+            return binder_indices[closest_indices], min_distances[closest_indices]
         
         else:
             raise ValueError(f"Unknown ensemble sampling strategy: {self.ensemble_sampling_strategy}")
 
+    def _compute_ensemble_weights(
+        self, 
+        min_distances: torch.Tensor,
+        sigma: float = 4.0
+    ):
+        """
+        Create feature dictionary where only one residue is marked as the ligand.
+        
+        Parameters
+        ----------
+        min_distances : torch.Tensor
+            Distances of selected residues
+       
+        Returns
+        -------
+        torch.Tensor
+            weights for scores and probabilities
+        """
+        weights = torch.ones(len(min_distances), device=min_distances.device)
+        
+        # Weight by minimum distance to receptor
+        distance_weights = 1.0 / (1.0 + min_distances/sigma)
+        
+        weights = weights * distance_weights
+
+        return  weights / weights.sum()
+        
+            
     def _create_single_residue_features(
         self, 
         feats: Dict[str, torch.Tensor], 
@@ -199,6 +227,7 @@ class EnsembleProteinAffinityModule():
         feats: Dict[str, torch.Tensor],
         multiplicity: int = 1,
         use_kernels: bool = False,
+        ensemble_weights: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass using ensemble averaging over binder residues.
@@ -227,7 +256,7 @@ class EnsembleProteinAffinityModule():
         binder_indices = self._identify_binder_residues(feats)
         
         # Select ensemble residues
-        ensemble_indices = self._select_ensemble_residues(binder_indices, feats, x_pred, multiplicity)
+        ensemble_indices, min_distances = self._select_ensemble_residues(binder_indices, feats, x_pred, multiplicity)
         
         # Collect predictions from each ensemble member
         ensemble_predictions = []
@@ -272,9 +301,14 @@ class EnsembleProteinAffinityModule():
         
         # Ensemble averaging
         if len(ensemble_predictions) > 0:
+            if ensemble_weights:
+                weights = self._compute_ensemble_weights(min_distances)
+            else:
+                weights = torch.ones(len(min_distances), device=min_distances.device) / len(min_distances)
+
             # Average predictions and probabilities (following original Boltz2 approach)
-            avg_prediction = torch.stack(ensemble_predictions).mean(dim=0)
-            avg_probability = torch.stack(ensemble_probabilities).mean(dim=0)
+            avg_prediction = (torch.stack(ensemble_predictions) * weights[:, None, None]).sum(dim=0)
+            avg_probability = (torch.stack(ensemble_probabilities) * weights[:, None, None]).sum(dim=0)
             # Convert averaged probability back to logits for consistency
             avg_logits = torch.logit(torch.clamp(avg_probability, min=1e-7, max=1-1e-7))
             
