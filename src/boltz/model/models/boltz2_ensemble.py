@@ -343,24 +343,16 @@ class Boltz2Ensemble(LightningModule):
                         self.affinity_module2, dynamic=False, fullgraph=False
                     )
 
-                if ensemble_sampling_strategy == "adaptive":
-                    self.affinity_module_ensemble1 = AdaptiveEnsembleProteinAffinityModule(
-                        affinity_module=self.affinity_module1,
-                        **ensemble_args
-                    )
-                    self.affinity_module_ensemble2 = AdaptiveEnsembleProteinAffinityModule(
-                        affinity_module=self.affinity_module2,
-                        **ensemble_args
-                    )
-                else:
-                    self.affinity_module_ensemble1 = EnsembleProteinAffinityModule(
-                        affinity_module=self.affinity_module1,
-                        **ensemble_args
-                    )
-                    self.affinity_module_ensemble2 = EnsembleProteinAffinityModule(
-                        affinity_module=self.affinity_module2,
-                        **ensemble_args
-                    )
+                self.affinity_module_ensemble1 = EnsembleProteinAffinityModule(
+                    input_embedder=self.input_embedder,
+                    affinity_module=self.affinity_module1,
+                    **ensemble_args
+                )
+                self.affinity_module_ensemble2 = EnsembleProteinAffinityModule(
+                    input_embedder=self.input_embedder,
+                    affinity_module=self.affinity_module2,
+                    **ensemble_args
+                )
             else:
                 self.affinity_module = AffinityModule(token_s, token_z, **affinity_model_args)
                 if compile_affinity:
@@ -646,13 +638,11 @@ class Boltz2Ensemble(LightningModule):
             coords_affinity = dict_out["sample_atom_coords"].detach()[best_idx][
                 None, None
             ]
-            s_inputs = self.input_embedder(feats, affinity=True)
 
             with torch.autocast("cuda", enabled=False):
                 if self.affinity_ensemble:
                     # Use ensemble modules for protein-protein affinity
                     dict_out_affinity1 = self.affinity_module_ensemble1.forward(
-                        s_inputs=s_inputs.detach(),
                         z=z.detach(),
                         x_pred=coords_affinity,
                         feats=feats,
@@ -661,7 +651,6 @@ class Boltz2Ensemble(LightningModule):
                     )
 
                     dict_out_affinity2 = self.affinity_module_ensemble2.forward(
-                        s_inputs=s_inputs.detach(),
                         z=z.detach(),
                         x_pred=coords_affinity,
                         feats=feats,
@@ -743,7 +732,6 @@ class Boltz2Ensemble(LightningModule):
                 else:
                     # Use single ensemble module for protein-protein affinity
                     dict_out_affinity = self.affinity_module_ensemble.forward(
-                        s_inputs=s_inputs.detach(),
                         z=z.detach(),
                         x_pred=coords_affinity,
                         feats=feats,
@@ -1322,3 +1310,49 @@ class Boltz2Ensemble(LightningModule):
 
         """
         return [EMA(self.ema_decay)] if self.use_ema else []
+
+
+    """
+    def predict_affinity_s_z(self, feats: dict[str, Tensor], recycling_steps: int, batch: dict[str, Tensor], batch_idx: int):
+
+        for i in range(recycling_steps + 1):
+            # Apply recycling
+            s = s_init + self.s_recycle(self.s_norm(s))
+            z = z_init + self.z_recycle(self.z_norm(z))
+
+            # Compute pairwise stack
+            if self.use_templates:
+                if self.is_template_compiled and not self.training:
+                    template_module = self.template_module._orig_mod  # noqa: SLF001
+                else:
+                    template_module = self.template_module
+
+                z = z + template_module(
+                    z, feats, pair_mask, use_kernels=self.use_kernels
+                )
+
+            if self.is_msa_compiled and not self.training:
+                msa_module = self.msa_module._orig_mod  # noqa: SLF001
+            else:
+                msa_module = self.msa_module
+
+            z = z + msa_module(
+                z, s_inputs, feats, use_kernels=self.use_kernels
+            )
+
+            # Revert to uncompiled version for validation
+            if self.is_pairformer_compiled and not self.training:
+                pairformer_module = self.pairformer_module._orig_mod  # noqa: SLF001
+            else:
+                pairformer_module = self.pairformer_module
+
+            s, z = pairformer_module(
+                s,
+                z,
+                mask=mask,
+                pair_mask=pair_mask,
+                use_kernels=self.use_kernels,
+            )
+
+        return z
+    """

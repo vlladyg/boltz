@@ -5,7 +5,7 @@ import numpy as np
 
 from boltz.data import const
 from boltz.model.modules.affinity import AffinityModule
-
+from boltz.model.modules.trunkv2 import InputEmbedder
 
 class EnsembleProteinAffinityModule():
     """
@@ -19,6 +19,7 @@ class EnsembleProteinAffinityModule():
 
     def __init__(
         self,
+        input_embedder: InputEmbedder,
         affinity_module: AffinityModule,
         ensemble_sampling_strategy: str = "top_k",  # "random", "top_k", "all"
         max_ensemble_size: int = 20,
@@ -42,6 +43,7 @@ class EnsembleProteinAffinityModule():
         super().__init__()
         
         # Use the provided affinity module
+        self.input_embedder = input_embedder
         self.affinity_module = affinity_module
         
         self.max_ensemble_size = max_ensemble_size
@@ -214,14 +216,13 @@ class EnsembleProteinAffinityModule():
         
         # Update mol_type to mark this residue as NONPOLYMER (ligand-like)
         new_mol_type = feats["mol_type"].clone()
-        #new_mol_type[0, residue_idx] = const.chain_type_ids["NONPOLYMER"]
+        new_mol_type[0, residue_idx] = const.chain_type_ids["NONPOLYMER"]
         single_residue_feats["mol_type"] = new_mol_type
         
         return single_residue_feats
 
     def forward(
         self,
-        s_inputs: torch.Tensor,
         z: torch.Tensor,
         x_pred: torch.Tensor,
         feats: Dict[str, torch.Tensor],
@@ -281,6 +282,7 @@ class EnsembleProteinAffinityModule():
                 + lig_mask[:, None] * lig_mask[None, :]
             )
 
+            s_inputs = self.input_embedder(single_residue_feats, affinity=True)
             # Apply mask to z
             z_masked = z * cross_pair_mask[None, :, :, None]
             
