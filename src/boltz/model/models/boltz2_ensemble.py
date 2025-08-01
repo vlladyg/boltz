@@ -422,6 +422,75 @@ class Boltz2Ensemble(LightningModule):
                 x["label"] for x in self.val_group_mapper.values()
             }, msg
 
+    def _run_recycling(self, feats, recycling_steps):
+        s_inputs = self.input_embedder(feats)
+        s_init = self.s_init(s_inputs)
+        z_init = (
+            self.z_init_1(s_inputs)[:, :, None]
+            + self.z_init_2(s_inputs)[:, None, :]
+        )
+        relative_position_encoding = self.rel_pos(feats)
+        z_init = z_init + relative_position_encoding
+        z_init = z_init + self.token_bonds(feats["token_bonds"].float())
+        if self.bond_type_feature:
+            z_init = z_init + self.token_bonds_type(feats["type_bonds"].long())
+        z_init = z_init + self.contact_conditioning(feats)
+        
+        # Perform rounds of the pairwise stack
+        s = torch.zeros_like(s_init)
+        z = torch.zeros_like(z_init)
+
+        # Compute pairwise mask
+        mask = feats["token_pad_mask"].float()
+        pair_mask = mask[:, :, None] * mask[:, None, :]
+        if self.run_trunk_and_structure:
+            for i in range(recycling_steps + 1):
+                with torch.set_grad_enabled(
+                    self.training
+                    and self.structure_prediction_training
+                    and (i == recycling_steps)
+                ):
+                    # Apply recycling
+                    s = s_init + self.s_recycle(self.s_norm(s))
+                    z = z_init + self.z_recycle(self.z_norm(z))
+                # Compute pairwise stack
+                if self.use_templates:
+                    if self.is_template_compiled and not self.training:
+                        template_module = self.template_module._orig_mod  # noqa: SLF001
+                    else:
+                        template_module = self.template_module
+
+                    z = z + template_module(
+                        z, feats, pair_mask, use_kernels=self.use_kernels
+                    )
+
+                if self.is_msa_compiled and not self.training:
+                    msa_module = self.msa_module._orig_mod  # noqa: SLF001
+                else:
+                    msa_module = self.msa_module
+
+                z = z + msa_module(
+                    z, s_inputs, feats, use_kernels=self.use_kernels
+                )
+
+                # Revert to uncompiled version for validation
+                if self.is_pairformer_compiled and not self.training:
+                    pairformer_module = self.pairformer_module._orig_mod  # noqa: SLF001
+                else:
+                    pairformer_module = self.pairformer_module
+
+                s, z = pairformer_module(
+                    s,
+                    z,
+                    mask=mask,
+                    pair_mask=pair_mask,
+                    use_kernels=self.use_kernels,
+                )    
+
+            return s, z
+                    
+                    
+
     def forward(
         self,
         feats: dict[str, Tensor],
@@ -461,6 +530,9 @@ class Boltz2Ensemble(LightningModule):
             # Compute pairwise mask
             mask = feats["token_pad_mask"].float()
             pair_mask = mask[:, :, None] * mask[:, None, :]
+
+            print("Run trunk and structure")
+            print(self.run_trunk_and_structure)
             if self.run_trunk_and_structure:
                 for i in range(recycling_steps + 1):
                     with torch.set_grad_enabled(
