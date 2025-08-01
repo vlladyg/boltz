@@ -443,51 +443,50 @@ class Boltz2Ensemble(LightningModule):
         # Compute pairwise mask
         mask = feats["token_pad_mask"].float()
         pair_mask = mask[:, :, None] * mask[:, None, :]
-        if self.run_trunk_and_structure:
-            for i in range(recycling_steps + 1):
-                with torch.set_grad_enabled(
-                    self.training
-                    and self.structure_prediction_training
-                    and (i == recycling_steps)
-                ):
-                    # Apply recycling
-                    s = s_init + self.s_recycle(self.s_norm(s))
-                    z = z_init + self.z_recycle(self.z_norm(z))
-                # Compute pairwise stack
-                if self.use_templates:
-                    if self.is_template_compiled and not self.training:
-                        template_module = self.template_module._orig_mod  # noqa: SLF001
-                    else:
-                        template_module = self.template_module
-
-                    z = z + template_module(
-                        z, feats, pair_mask, use_kernels=self.use_kernels
-                    )
-
-                if self.is_msa_compiled and not self.training:
-                    msa_module = self.msa_module._orig_mod  # noqa: SLF001
+        for i in range(recycling_steps + 1):
+            with torch.set_grad_enabled(
+                self.training
+                and self.structure_prediction_training
+                and (i == recycling_steps)
+            ):
+                # Apply recycling
+                s = s_init + self.s_recycle(self.s_norm(s))
+                z = z_init + self.z_recycle(self.z_norm(z))
+            # Compute pairwise stack
+            if self.use_templates:
+                if self.is_template_compiled and not self.training:
+                    template_module = self.template_module._orig_mod  # noqa: SLF001
                 else:
-                    msa_module = self.msa_module
+                    template_module = self.template_module
 
-                z = z + msa_module(
-                    z, s_inputs, feats, use_kernels=self.use_kernels
+                z = z + template_module(
+                    z, feats, pair_mask, use_kernels=self.use_kernels
                 )
 
-                # Revert to uncompiled version for validation
-                if self.is_pairformer_compiled and not self.training:
-                    pairformer_module = self.pairformer_module._orig_mod  # noqa: SLF001
-                else:
-                    pairformer_module = self.pairformer_module
+            if self.is_msa_compiled and not self.training:
+                msa_module = self.msa_module._orig_mod  # noqa: SLF001
+            else:
+                msa_module = self.msa_module
 
-                s, z = pairformer_module(
-                    s,
-                    z,
-                    mask=mask,
-                    pair_mask=pair_mask,
-                    use_kernels=self.use_kernels,
-                )    
+            z = z + msa_module(
+                z, s_inputs, feats, use_kernels=self.use_kernels
+            )
 
-            return s, z
+            # Revert to uncompiled version for validation
+            if self.is_pairformer_compiled and not self.training:
+                pairformer_module = self.pairformer_module._orig_mod  # noqa: SLF001
+            else:
+                pairformer_module = self.pairformer_module
+
+            s, z = pairformer_module(
+                s,
+                z,
+                mask=mask,
+                pair_mask=pair_mask,
+                use_kernels=self.use_kernels,
+            )    
+
+        return z
                     
                     
 
@@ -718,6 +717,8 @@ class Boltz2Ensemble(LightningModule):
                         z=z.detach(),
                         x_pred=coords_affinity,
                         feats=feats,
+                        run_recycling=self._run_recycling,
+                        recycling_steps=recycling_steps,
                         multiplicity=1,
                         use_kernels=self.use_kernels,
                     )
@@ -726,6 +727,8 @@ class Boltz2Ensemble(LightningModule):
                         z=z.detach(),
                         x_pred=coords_affinity,
                         feats=feats,
+                        run_recycling=self._run_recycling,
+                        recycling_steps=recycling_steps,
                         multiplicity=1,
                         use_kernels=self.use_kernels,
                     )

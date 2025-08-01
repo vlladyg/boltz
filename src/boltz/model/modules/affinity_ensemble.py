@@ -226,6 +226,8 @@ class EnsembleProteinAffinityModule():
         z: torch.Tensor,
         x_pred: torch.Tensor,
         feats: Dict[str, torch.Tensor],
+        run_recycling: nn.Module,
+        recycling_steps: int,
         multiplicity: int = 1,
         use_kernels: bool = False,
         ensemble_weights: bool = False,
@@ -283,6 +285,7 @@ class EnsembleProteinAffinityModule():
             )
 
             s_inputs = self.input_embedder(single_residue_feats, affinity=True)
+            z = run_recycling(single_residue_feats, recycling_steps)
             # Apply mask to z
             z_masked = z * cross_pair_mask[None, :, :, None]
             
