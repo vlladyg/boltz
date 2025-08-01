@@ -24,6 +24,7 @@ class EnsembleProteinAffinityModule():
         ensemble_sampling_strategy: str = "top_k",  # "random", "top_k", "all"
         max_ensemble_size: int = 20,
         min_ensemble_size: int = 5,
+        run_recycling_flag: bool = False,
         **kwargs
     ):
         """
@@ -285,7 +286,10 @@ class EnsembleProteinAffinityModule():
             )
 
             s_inputs = self.input_embedder(single_residue_feats, affinity=True)
-            z = run_recycling(single_residue_feats, recycling_steps)
+            if self.run_recycling_flag:
+                z = run_recycling(single_residue_feats, recycling_steps)
+            else:
+                z = z
             # Apply mask to z
             z_masked = z * cross_pair_mask[None, :, :, None]
             
