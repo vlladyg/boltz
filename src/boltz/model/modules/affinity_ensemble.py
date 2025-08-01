@@ -49,6 +49,7 @@ class EnsembleProteinAffinityModule():
         
         self.max_ensemble_size = max_ensemble_size
         self.min_ensemble_size = min_ensemble_size
+        self.run_recycling_flag = run_recycling_flag
         self.ensemble_sampling_strategy = ensemble_sampling_strategy
 
     def _identify_binder_residues(self, feats: Dict[str, torch.Tensor]) -> torch.Tensor:
