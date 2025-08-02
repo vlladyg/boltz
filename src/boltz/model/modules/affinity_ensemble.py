@@ -208,7 +208,7 @@ class EnsembleProteinAffinityModule():
         
         if len(residue_atom_indices) == 0:
             # Fallback to single residue if no atoms found
-            return self._create_single_residue_features(feats, residue_idx)
+            return self._create_single_residue_features(feats, residue_idx, use_atomic_level=False)
         
         # Create new feature tensors with atomic tokens
         device = feats["res_type"].device
