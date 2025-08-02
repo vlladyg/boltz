@@ -7,6 +7,12 @@ from boltz.data import const
 from boltz.model.modules.affinity import AffinityModule
 from boltz.model.modules.trunkv2 import InputEmbedder
 
+import numpy as np
+from typing import Optional
+from boltz.data.tokenize.boltz2 import TokenData, token_astuple
+from boltz.data import const
+from boltz.data.feature.protein_protein_featurizer import ProteinProteinFeaturizer
+
 class EnsembleProteinAffinityModule():
     """
     Ensemble-based protein-protein affinity prediction module.
@@ -51,7 +57,9 @@ class EnsembleProteinAffinityModule():
         self.min_ensemble_size = min_ensemble_size
         self.run_recycling_flag = run_recycling_flag
         self.ensemble_sampling_strategy = ensemble_sampling_strategy
+        self.featurizer = ProteinProteinFeaturizer()
 
+    
     def _identify_binder_residues(self, feats: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Identify residues that belong to the binder protein.
@@ -185,198 +193,185 @@ class EnsembleProteinAffinityModule():
 
         return  weights / weights.sum()
         
-    def _create_atomic_level_features(
-        self, 
-        feats: Dict[str, torch.Tensor], 
-        residue_idx: int
-    ) -> Dict[str, torch.Tensor]:
+    def _retokenize_residue_as_atoms(self, tokenized_data, residue_token_idx):
         """
-        Create atomic-level features for a residue, following the exact same pattern 
-        as the existing NONPOLYMER atomic tokenization.
+        Retokenize a specific residue using Boltz's NONPOLYMER atomic tokenization logic.
         
-        This mimics the tokenization from boltz2.py lines 260-307.
+        This uses the exact same code path as ligand tokenization (lines 260-307 in boltz2.py).
         """
-        # Get the UNK protein token ID (same as used for NONPOLYMER atoms)
-        unk_token = const.unk_token["PROTEIN"]  # "UNK"
-        unk_id = const.token_ids[unk_token]     # Index of UNK token
+        # Get the residue token
+        residue_token = tokenized_data.tokens[residue_token_idx]
         
-        # Get atom indices for this residue
-        # We need to find which atoms belong to this residue token
-        atom_to_token = feats["atom_to_token"]  # Maps atom_idx -> token_idx
-        residue_atom_mask = (atom_to_token == residue_idx)
-        residue_atom_indices = torch.where(residue_atom_mask)[0]
+        # Get the underlying structure data
+        struct = tokenized_data.structure
         
-        if len(residue_atom_indices) == 0:
-            # Fallback to single residue if no atoms found
-            return self._create_single_residue_features(feats, residue_idx, use_atomic_level=False)
+        # Find the residue in the structure
+        res_idx = residue_token['res_idx']
+        asym_id = residue_token['asym_id']
         
-        # Create new feature tensors with atomic tokens
-        device = feats["res_type"].device
-        batch_size = feats["res_type"].shape[0]
-        original_num_tokens = feats["res_type"].shape[1]
-        num_atoms = len(residue_atom_indices)
+        # Find the chain and residue
+        chain = None
+        residue = None
+        for c in struct.chains:
+            if c['asym_id'] == asym_id:
+                chain = c
+                res_start = c['res_idx']
+                res_end = c['res_idx'] + c['res_num']
+                for r in struct.residues[res_start:res_end]:
+                    if r['res_idx'] == res_idx:
+                        residue = r
+                        break
+                break
         
-        # Calculate new token count: remove 1 residue token, add N atom tokens
-        new_num_tokens = original_num_tokens - 1 + num_atoms
+        if chain is None or residue is None:
+            raise ValueError(f"Could not find residue {res_idx} in chain {asym_id}")
         
-        atomic_feats = {}
+        # Get atom data for this residue
+        atom_start = residue['atom_idx']
+        atom_end = residue['atom_idx'] + residue['atom_num']
+        atom_data = struct.atoms[atom_start:atom_end]
         
-        # Process each feature tensor
-        for key, value in feats.items():
-            if not isinstance(value, torch.Tensor):
-                atomic_feats[key] = value
-                continue
+        # Get coordinates (using first ensemble)
+        offset = struct.ensemble[0]['atom_coord_idx']
+        atom_coords = struct.coords[offset + atom_start : offset + atom_end]['coords']
+        
+        # Create atomic tokens using NONPOLYMER tokenization logic
+        atomic_tokens = []
+        unk_token = const.unk_token["PROTEIN"]
+        unk_id = const.token_ids[unk_token]
+        
+        # Start token numbering from the original residue token index
+        token_idx = tokenized_data.tokens[residue_token_idx][0]
+        
+        for i, atom in enumerate(atom_data):
+            # Token is present if atom is present
+            is_present = residue['is_present'] & atom['is_present']
+            atom_index = atom_start + i
+            
+            # Create atomic token (following lines 277-302 in boltz2.py exactly)
+            atomic_token = TokenData(
+                token_idx=token_idx,
+                atom_idx=atom_index,
+                atom_num=1,  # Each atomic token represents 1 atom
+                res_idx=residue['res_idx'],
+                res_type=unk_id,  # Use UNK token like NONPOLYMER
+                res_name=residue['name'],
+                sym_id=chain['sym_id'],
+                asym_id=chain['asym_id'],
+                entity_id=chain['entity_id'],
+                mol_type=const.chain_type_ids["NONPOLYMER"],  # Mark as ligand-like
+                center_idx=atom_index,  # Each atom is its own center
+                disto_idx=atom_index,   # Each atom is its own disto
+                center_coords=atom_coords[i],
+                disto_coords=atom_coords[i],
+                resolved_mask=is_present,
+                disto_mask=is_present,
+                modified=False,  # NONPOLYMER atoms are not modified
+                frame_rot=np.eye(3).flatten(),
+                frame_t=np.zeros(3),
+                frame_mask=False,
+                cyclic_period=chain['cyclic_period'],
+                affinity_mask=True,  # Mark for affinity prediction
+            )
+            
+            atomic_tokens.append(token_astuple(atomic_token))
+            token_idx += 1
+        
+        return atomic_tokens
+    
+    def _create_retokenized_structure(self, tokenized_data, residue_token_idx):
+        """Create new tokenized structure with one residue converted to atomic tokens."""
+        
+        # Get atomic tokens for the selected residue
+        atomic_tokens = self._retokenize_residue_as_atoms(tokenized_data, residue_token_idx)
+        
+        # Create new token array
+        original_tokens = tokenized_data.tokens
+        num_original = len(original_tokens)
+        num_atomic = len(atomic_tokens)
+        num_new = num_original - 1 + num_atomic  # Remove 1 residue, add N atoms
+        
+        # Create new token array
+        new_tokens = np.zeros(num_new, dtype=original_tokens.dtype)
+        
+        # Copy tokens before the residue
+        if residue_token_idx > 0:
+            new_tokens[:residue_token_idx] = original_tokens[:residue_token_idx]
+        
+        # Insert atomic tokens
+        for i, atomic_token in enumerate(atomic_tokens):
+            new_tokens[residue_token_idx + i] = atomic_token
+        
+        # Copy tokens after the residue
+        remaining_start = residue_token_idx + num_atomic
+        original_remaining_start = residue_token_idx + 1
+        if original_remaining_start < num_original:
+            # Update token indices for remaining tokens
+            remaining_tokens = original_tokens[original_remaining_start:].copy().tolist()
+            # Adjust token_idx for all remaining tokens
+            for i in range(len(remaining_tokens)):
+                #print(remaining_tokens[i])
+                remaining_tokens[i] = list(remaining_tokens[i])
+                remaining_tokens[i][0] += (num_atomic - 1)  # token_idx adjustment
+                remaining_tokens[i] = tuple(remaining_tokens[i])
+            
+            new_tokens[remaining_start:] = remaining_tokens
+        
+        # Create new tokenized object with atomic tokens
+        from boltz.data.types import Tokenized
+        new_tokenized = Tokenized(
+            tokens=new_tokens,
+            bonds=tokenized_data.bonds,  # Keep original bonds for simplicity
+            structure=tokenized_data.structure,
+            msa=tokenized_data.msa,
+            record=tokenized_data.record,
+            residue_constraints=tokenized_data.residue_constraints,
+            templates=tokenized_data.templates,
+            template_tokens=tokenized_data.template_tokens,
+            template_bonds=tokenized_data.template_bonds,
+            extra_mols=tokenized_data.extra_mols,
+        )
+        
+        return new_tokenized
+    
+    def _create_atomic_features(self, feats, residue_token_idx, tokenized_data, molecules):
+        """Create features from retokenized structure using standard featurizer."""
+        
+        # Create retokenized structure with atomic tokens
+        atomic_tokenized = self._create_retokenized_structure(tokenized_data, residue_token_idx)
+
+        num_atomic = len(atomic_tokenized.tokens) - len(tokenized_data.tokens)
+        # Use standard featurizer to generate features
+        import numpy as np
+        random_gen = np.random.default_rng(42)
+        
+        atomic_feats = self.featurizer.process(
+            data=atomic_tokenized,
+            random=random_gen,
+            molecules=molecules,
+            training=False,
+            max_seqs=1,
+            compute_affinity=True,
+            max_tokens=None,  # Let it auto-size
+            max_atoms=None,
+        )
+        for key, value in atomic_feats.items():
+            if isinstance(value, torch.Tensor):
+                atomic_feats[key] = atomic_feats[key].unsqueeze(0).to(device = feats["affinity_token_mask"].device)
                 
-            if key == "res_type":
-                # Create new res_type with atomic tokens
-                new_res_type = torch.zeros((batch_size, new_num_tokens), 
-                                        dtype=value.dtype, device=device)
-                
-                # Copy all tokens except the residue being atomized
-                mask = torch.ones(original_num_tokens, dtype=torch.bool)
-                mask[residue_idx] = False
-                new_res_type[:, :original_num_tokens-1] = value[:, mask]
-                
-                # Add atomic tokens (all UNK tokens)
-                new_res_type[:, original_num_tokens-1:] = unk_id
-                atomic_feats[key] = new_res_type
-                
-            elif key == "mol_type":
-                # Create new mol_type tensor
-                new_mol_type = torch.zeros((batch_size, new_num_tokens), 
-                                        dtype=value.dtype, device=device)
-                
-                # Copy all tokens except the residue being atomized
-                mask = torch.ones(original_num_tokens, dtype=torch.bool)
-                mask[residue_idx] = False
-                new_mol_type[:, :original_num_tokens-1] = value[:, mask]
-                
-                # Set atomic tokens as NONPOLYMER (exactly like ligand atoms)
-                new_mol_type[:, original_num_tokens-1:] = const.chain_type_ids["NONPOLYMER"]
-                atomic_feats[key] = new_mol_type
-                
-            elif key == "affinity_token_mask":
-                # Create new affinity mask with atomic tokens marked
-                new_affinity_mask = torch.zeros((batch_size, new_num_tokens), 
-                                            dtype=value.dtype, device=device)
-                
-                # Copy existing mask (excluding the residue being atomized)
-                mask = torch.ones(original_num_tokens, dtype=torch.bool)
-                mask[residue_idx] = False
-                new_affinity_mask[:, :original_num_tokens-1] = value[:, mask]
-                
-                # Mark all atomic tokens as affinity targets
-                new_affinity_mask[:, original_num_tokens-1:] = 1.0
-                atomic_feats[key] = new_affinity_mask
-                
-            elif key == "token_to_rep_atom":
-                # Update token-to-atom mapping for atomic tokens
-                # Each atomic token maps to its own atom
-                new_token_to_rep_atom = torch.zeros((batch_size, new_num_tokens, value.shape[2]), 
-                                                dtype=value.dtype, device=device)
-                
-                # Copy existing mappings (excluding the residue being atomized)
-                mask = torch.ones(original_num_tokens, dtype=torch.bool)
-                mask[residue_idx] = False
-                new_token_to_rep_atom[:, :original_num_tokens-1] = value[:, mask]
-                
-                # For atomic tokens, each maps to its corresponding atom
-                for i, atom_idx in enumerate(residue_atom_indices):
-                    token_pos = original_num_tokens - 1 + i
-                    new_token_to_rep_atom[:, token_pos, atom_idx] = 1.0
-                    
-                atomic_feats[key] = new_token_to_rep_atom
-                
-            elif key in ["token_pad_mask", "receptor_mask"] and value.shape[1] == original_num_tokens:
-                # Handle token-level masks
-                new_mask = torch.zeros((batch_size, new_num_tokens), 
-                                    dtype=value.dtype, device=device)
-                
-                # Copy existing mask (excluding the residue being atomized)
-                mask = torch.ones(original_num_tokens, dtype=torch.bool)
-                mask[residue_idx] = False
-                new_mask[:, :original_num_tokens-1] = value[:, mask]
-                
-                if key == "token_pad_mask":
-                    # Atomic tokens are not padded (they exist)
-                    new_mask[:, original_num_tokens-1:] = 1.0
-                elif key == "receptor_mask":
-                    # Atomic tokens are not receptor (they are ligand-like)
-                    new_mask[:, original_num_tokens-1:] = 0.0
-                    
-                atomic_feats[key] = new_mask
-                
-            elif len(value.shape) >= 2 and value.shape[1] == original_num_tokens:
-                # Handle other token-level features by extending them
-                new_shape = list(value.shape)
-                new_shape[1] = new_num_tokens
-                new_tensor = torch.zeros(new_shape, dtype=value.dtype, device=device)
-                
-                # Copy existing features (excluding the residue being atomized)
-                mask = torch.ones(original_num_tokens, dtype=torch.bool)
-                mask[residue_idx] = False
-                new_tensor[:, :original_num_tokens-1] = value[:, mask]
-                
-                # For atomic tokens, duplicate the original residue features
-                # This preserves things like positional encodings, etc.
-                original_residue_feats = value[:, residue_idx:residue_idx+1]
-                for i in range(num_atoms):
-                    token_pos = original_num_tokens - 1 + i
-                    new_tensor[:, token_pos:token_pos+1] = original_residue_feats
-                    
-                atomic_feats[key] = new_tensor
-                
-            else:
-                # Keep unchanged for non-token features
-                atomic_feats[key] = value
+        #atomic_feats["token_to_rep_atom"]   = atomic_feats["token_to_rep_atom"].unsqueeze(0)  # [1, N_tokens, N_atoms]
+        #atomic_feats["token_pad_mask"]      = atomic_feats["token_pad_mask"].unsqueeze(0)     # [1, N_tokens]
+        #atomic_feats["mol_type"]            = atomic_feats["mol_type"].unsqueeze(0)           # [1, N_tokens]
+        #atomic_feats["affinity_token_mask"] = atomic_feats["affinity_token_mask"].unsqueeze(0) # [1, N_tokens]
+        #atomic_feats["ref_pos"] = atomic_feats["ref_pos"].unsqueeze(0) # [1, N_tokens]
+        
+        new_affinity_mask = torch.zeros_like(atomic_feats["affinity_token_mask"])
+        new_affinity_mask[0, residue_token_idx:residue_token_idx+num_atomic] = 1.0
+        atomic_feats["affinity_token_mask"] = new_affinity_mask
         
         return atomic_feats
-
-    def _create_single_residue_features(
-        self, 
-        feats: Dict[str, torch.Tensor], 
-        residue_idx: int,
-        use_atomic_level: bool = True
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Enhanced single residue feature creation with optional atomic-level tokenization.
-        
-        Parameters
-        ----------
-        feats : Dict[str, torch.Tensor]
-            Original feature dictionary
-        residue_idx : int
-            Index of the residue to treat as ligand
-        use_atomic_level : bool
-            Whether to use atomic-level tokenization (your suggested improvement)
-            
-        Returns
-        -------
-        Dict[str, torch.Tensor]
-            Modified feature dictionary
-        """
-        if use_atomic_level:
-            # Use atomic-level tokenization (matches existing NONPOLYMER pattern exactly)
-            return self._create_atomic_level_features(feats, residue_idx)
-        else:
-            # Original residue-level approach
-            single_residue_feats = {}
-            for key, value in feats.items():
-                single_residue_feats[key] = value.clone() if isinstance(value, torch.Tensor) else value
-            
-            # Create new affinity mask with only one residue active
-            new_affinity_mask = torch.zeros_like(feats["affinity_token_mask"])
-            new_affinity_mask[0, residue_idx] = 1.0
-            single_residue_feats["affinity_token_mask"] = new_affinity_mask
-            
-            # Update mol_type to mark this residue as NONPOLYMER (ligand-like)
-            new_mol_type = feats["mol_type"].clone()
-            new_mol_type[0, residue_idx] = const.chain_type_ids["NONPOLYMER"]
-            single_residue_feats["mol_type"] = new_mol_type
-            
-            return single_residue_feats
     
-    def _create_single_residue_features_old(
+    def _create_single_residue_features(
         self, 
         feats: Dict[str, torch.Tensor], 
         residue_idx: int
@@ -452,20 +447,31 @@ class EnsembleProteinAffinityModule():
         
         # Select ensemble residues
         ensemble_indices, min_distances = self._select_ensemble_residues(binder_indices, feats, x_pred, multiplicity)
+
+        if self.run_recycling_flag:
+            import pickle 
+            file_path = 'tokenized.pkl'
+            with open(file_path, 'rb') as file:
+                tokenized_data = pickle.load(file)
+            file_path = 'molecules.pkl'
+            with open(file_path, 'rb') as file:
+                molecules = pickle.load(file)
         
         # Collect predictions from each ensemble member
         ensemble_predictions = []
         ensemble_probabilities = []
 
-
-        pad_token_mask = feats["token_pad_mask"][0]
-        rec_mask = feats["receptor_mask"][0].to(torch.bool)
-        rec_mask = rec_mask * pad_token_mask
-        
         for residue_idx in ensemble_indices:
             # Create single-residue features
-            single_residue_feats = self._create_single_residue_features(feats, residue_idx.item())
+            #
+            if self.run_recycling_flag:
+                single_residue_feats = self._create_atomic_features(feats, residue_idx, tokenized_data, molecules)
+            else:
+                single_residue_feats = self._create_single_residue_features(feats, residue_idx.item())   
             
+            pad_token_mask = single_residue_feats["token_pad_mask"][0]
+            rec_mask = single_residue_feats["receptor_mask"][0].to(torch.bool)
+            rec_mask = rec_mask * pad_token_mask
             # Create cross_pair_mask for this single residue
             lig_mask = single_residue_feats["affinity_token_mask"][0].to(torch.bool)  # single ligand residue
             lig_mask = lig_mask * pad_token_mask

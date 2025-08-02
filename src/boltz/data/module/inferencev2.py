@@ -301,6 +301,15 @@ class PredictionDataset(torch.utils.data.Dataset):
             return self.__getitem__(0)
 
         # Add record
+        import pickle
+        file_path = 'tokenized.pkl'
+        with open(file_path, 'wb') as file:
+            pickle.dump(tokenized, file)
+        file_path = 'molecules.pkl'
+        with open(file_path, 'wb') as file:
+            pickle.dump(molecules, file)
+            
+        #features["molecules"] = molecules
         features["record"] = record
         return features
 
