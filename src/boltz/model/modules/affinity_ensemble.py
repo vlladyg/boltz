@@ -204,7 +204,9 @@ class EnsembleProteinAffinityModule():
         # Find the residue in the structure
         res_idx = residue_token['res_idx']
         asym_id = residue_token['asym_id']
-        
+
+        print("Res idx, asym id")
+        print(res_idx, asym_id)
         # Find the chain and residue
         chain = None
         residue = None
@@ -229,6 +231,9 @@ class EnsembleProteinAffinityModule():
         
         # Get coordinates (using first ensemble)
         offset = struct.ensemble[0]['atom_coord_idx']
+
+        print("Offset atom start atom end")
+        print(offset, atom_start, atom_end)
         atom_coords = struct.coords[offset + atom_start : offset + atom_end]['coords']
         
         # Create atomic tokens using NONPOLYMER tokenization logic
