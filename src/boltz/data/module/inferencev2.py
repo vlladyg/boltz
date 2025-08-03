@@ -142,6 +142,7 @@ def collate(data: list[dict[str, Tensor]]) -> dict[str, Tensor]:
             "ligand_symmetries",
             "record",
             "affinity_mw",
+            "featurizer_args",
         ]:
             # Check if all have the same shape
             shape = values[0].shape
@@ -301,16 +302,29 @@ class PredictionDataset(torch.utils.data.Dataset):
             return self.__getitem__(0)
 
         # Add record
-        import pickle
-        file_path = 'tokenized.pkl'
-        with open(file_path, 'wb') as file:
-            pickle.dump(tokenized, file)
-        file_path = 'molecules.pkl'
-        with open(file_path, 'wb') as file:
-            pickle.dump(molecules, file)
-            
-        #features["molecules"] = molecules
         features["record"] = record
+        features["featurizer_args"] = {"data": tokenized,
+                                        "molecules": molecules,
+                                        "random": random,
+                                        "training": False,
+                                        "max_atoms": None,
+                                        "max_tokens": None,
+                                        "max_seqs": const.max_msa_seqs,
+                                        "pad_to_max_seqs": False,
+                                        "single_sequence_prop": 0.0,
+                                        "compute_frames": True,
+                                        "inference_pocket_constraints": pocket_constraints,
+                                        "inference_contact_constraints": contact_constraints,
+                                        "compute_constraint_features": True,
+                                        "override_method": self.override_method,
+                                        "compute_affinity": self.affinity,
+        }
+
+        import pickle
+        file_path = 'features.pkl'
+        with open(file_path, 'wb') as file:
+            pickle.dump(features, file)
+
         return features
 
     def __len__(self) -> int:
@@ -439,6 +453,7 @@ class Boltz2InferenceDataModule(pl.LightningDataModule):
                 "ligand_symmetries",
                 "record",
                 "affinity_mw",
+                "featurizer_args",
             ]:
                 batch[key] = batch[key].to(device)
         return batch

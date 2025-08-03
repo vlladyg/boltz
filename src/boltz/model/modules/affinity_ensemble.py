@@ -7,7 +7,6 @@ from boltz.data import const
 from boltz.model.modules.affinity import AffinityModule
 from boltz.model.modules.trunkv2 import InputEmbedder
 
-import numpy as np
 from typing import Optional
 from boltz.data.tokenize.boltz2 import TokenData, token_astuple
 from boltz.data import const
@@ -27,10 +26,9 @@ class EnsembleProteinAffinityModule():
         self,
         input_embedder: InputEmbedder,
         affinity_module: AffinityModule,
+        atomic_affinity: bool,
         ensemble_sampling_strategy: str = "top_k",  # "random", "top_k", "all"
-        max_ensemble_size: int = 20,
         min_ensemble_size: int = 5,
-        run_recycling_flag: bool = False,
         **kwargs
     ):
         """
@@ -40,8 +38,6 @@ class EnsembleProteinAffinityModule():
         ----------
         affinity_module : AffinityModule
             Pre-initialized protein-ligand affinity module to use for predictions
-        max_ensemble_size : int
-            Maximum number of residues to include in ensemble (for computational efficiency)
         min_ensemble_size : int
             Minimum number of residues to include in ensemble
         ensemble_sampling_strategy : str
@@ -52,10 +48,10 @@ class EnsembleProteinAffinityModule():
         # Use the provided affinity module
         self.input_embedder = input_embedder
         self.affinity_module = affinity_module
-        
-        self.max_ensemble_size = max_ensemble_size
+        self.atomic_affinity = atomic_affinity
+
+        self.max_ensemble_size = 10 if self.atomic_affinity else 20
         self.min_ensemble_size = min_ensemble_size
-        self.run_recycling_flag = run_recycling_flag
         self.ensemble_sampling_strategy = ensemble_sampling_strategy
         self.featurizer = ProteinProteinFeaturizer()
 
@@ -334,36 +330,21 @@ class EnsembleProteinAffinityModule():
         
         return new_tokenized
     
-    def _create_atomic_features(self, feats, residue_token_idx, tokenized_data, molecules):
+    def _create_atomic_features(self, feats, residue_token_idx):
         """Create features from retokenized structure using standard featurizer."""
         
         # Create retokenized structure with atomic tokens
-        atomic_tokenized = self._create_retokenized_structure(tokenized_data, residue_token_idx)
+        atomic_tokenized = self._create_retokenized_structure(feats['featurizer_args'][0]['data'], residue_token_idx)
 
-        num_atomic = len(atomic_tokenized.tokens) - len(tokenized_data.tokens)
+        num_atomic = len(atomic_tokenized.tokens) - len(feats['featurizer_args'][0]['data'].tokens)
         # Use standard featurizer to generate features
-        import numpy as np
         random_gen = np.random.default_rng(42)
         
-        atomic_feats = self.featurizer.process(
-            data=atomic_tokenized,
-            random=random_gen,
-            molecules=molecules,
-            training=False,
-            max_seqs=1,
-            compute_affinity=True,
-            max_tokens=None,  # Let it auto-size
-            max_atoms=None,
-        )
+        atomic_feats = self.featurizer.process(**feats['featurizer_args'][0])
+        
         for key, value in atomic_feats.items():
             if isinstance(value, torch.Tensor):
                 atomic_feats[key] = atomic_feats[key].unsqueeze(0).to(device = feats["affinity_token_mask"].device)
-                
-        #atomic_feats["token_to_rep_atom"]   = atomic_feats["token_to_rep_atom"].unsqueeze(0)  # [1, N_tokens, N_atoms]
-        #atomic_feats["token_pad_mask"]      = atomic_feats["token_pad_mask"].unsqueeze(0)     # [1, N_tokens]
-        #atomic_feats["mol_type"]            = atomic_feats["mol_type"].unsqueeze(0)           # [1, N_tokens]
-        #atomic_feats["affinity_token_mask"] = atomic_feats["affinity_token_mask"].unsqueeze(0) # [1, N_tokens]
-        #atomic_feats["ref_pos"] = atomic_feats["ref_pos"].unsqueeze(0) # [1, N_tokens]
         
         new_affinity_mask = torch.zeros_like(atomic_feats["affinity_token_mask"])
         new_affinity_mask[0, residue_token_idx:residue_token_idx+num_atomic] = 1.0
@@ -414,7 +395,6 @@ class EnsembleProteinAffinityModule():
         x_pred: torch.Tensor,
         feats: Dict[str, torch.Tensor],
         run_recycling: nn.Module,
-        recycling_steps: int,
         multiplicity: int = 1,
         use_kernels: bool = False,
         ensemble_weights: bool = False,
@@ -447,16 +427,6 @@ class EnsembleProteinAffinityModule():
         
         # Select ensemble residues
         ensemble_indices, min_distances = self._select_ensemble_residues(binder_indices, feats, x_pred, multiplicity)
-
-        if self.run_recycling_flag:
-            import pickle 
-            file_path = 'tokenized.pkl'
-            with open(file_path, 'rb') as file:
-                tokenized_data = pickle.load(file)
-            file_path = 'molecules.pkl'
-            with open(file_path, 'rb') as file:
-                molecules = pickle.load(file)
-        
         # Collect predictions from each ensemble member
         ensemble_predictions = []
         ensemble_probabilities = []
@@ -464,8 +434,8 @@ class EnsembleProteinAffinityModule():
         for residue_idx in ensemble_indices:
             # Create single-residue features
             #
-            if self.run_recycling_flag:
-                single_residue_feats = self._create_atomic_features(feats, residue_idx, tokenized_data, molecules)
+            if self.atomic_affinity:
+                single_residue_feats = self._create_atomic_features(feats, residue_idx)
             else:
                 single_residue_feats = self._create_single_residue_features(feats, residue_idx.item())   
             
@@ -483,10 +453,8 @@ class EnsembleProteinAffinityModule():
             )
 
             s_inputs = self.input_embedder(single_residue_feats, affinity=True)
-            if self.run_recycling_flag:
-                z = run_recycling(single_residue_feats, recycling_steps)
-            else:
-                z = z
+            if self.atomic_affinity:
+                z = run_recycling(single_residue_feats, 1).detach()
             # Apply mask to z
             z_masked = z * cross_pair_mask[None, :, :, None]
             

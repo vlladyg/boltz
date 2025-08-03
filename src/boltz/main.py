@@ -974,17 +974,25 @@ def cli() -> None:
 )
 
 @click.option(
+    "--model",
+    default="boltz2",
+    type=click.Choice(["boltz1", "boltz2", "boltz2_pc", "boltz2_ensemble"]),
+    help="The model to use for prediction. Default is boltz2.",
+)
+
+
+@click.option(
     "--protein_ligand_mode",
     is_flag=True,
     help="Whether to use protein protein module for binding affinity predictions. Default is False.",
 )
 
 @click.option(
-    "--model",
-    default="boltz2",
-    type=click.Choice(["boltz1", "boltz2", "boltz2_pc", "boltz2_ensemble"]),
-    help="The model to use for prediction. Default is boltz2.",
+    "--atomic_affinity",
+    is_flag=True,
+    help="Whether to use protein protein module for binding affinity predictions. Default is False.",
 )
+
 @click.option(
     "--method",
     type=str,
@@ -1087,6 +1095,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     no_kernels: bool = False,
     write_embeddings: bool = False,
     protein_ligand_mode: bool = False,
+    atomic_affinity: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1460,6 +1469,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
                 msa_args=asdict(msa_args),
                 steering_args=asdict(steering_args),
                 affinity_mw_correction=affinity_mw_correction,
+                atomic_affinity = atomic_affinity,
             )
         model_module.eval()
 

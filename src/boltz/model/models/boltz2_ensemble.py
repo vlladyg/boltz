@@ -110,6 +110,7 @@ class Boltz2Ensemble(LightningModule):
         checkpoint_diffusion_conditioning: bool = False,
         use_templates_v2: bool = False,
         use_kernels: bool = False,
+        atomic_affinity: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["validators"])
@@ -325,6 +326,8 @@ class Boltz2Ensemble(LightningModule):
                 )
                 
         if affinity_prediction:
+
+            self.atomic_affinity = atomic_affinity
             # Create ensemble module with base affinity module
             ensemble_args = {
                 "max_ensemble_size": max_ensemble_size,
@@ -346,11 +349,13 @@ class Boltz2Ensemble(LightningModule):
                 self.affinity_module_ensemble1 = EnsembleProteinAffinityModule(
                     input_embedder=self.input_embedder,
                     affinity_module=self.affinity_module1,
+                    atomic_affinity = self.atomic_affinity,
                     **ensemble_args
                 )
                 self.affinity_module_ensemble2 = EnsembleProteinAffinityModule(
                     input_embedder=self.input_embedder,
                     affinity_module=self.affinity_module2,
+                    atomic_affinity = self.atomic_affinity,
                     **ensemble_args
                 )
             else:
@@ -360,16 +365,13 @@ class Boltz2Ensemble(LightningModule):
                         self.affinity_module, dynamic=False, fullgraph=False
                     )
 
-                if ensemble_sampling_strategy == "adaptive":
-                    self.affinity_module_ensemble = AdaptiveEnsembleProteinAffinityModule(
-                        affinity_module=self.affinity_module,
-                        **ensemble_args
-                    )
-                else:
-                    self.affinity_module_ensemble = EnsembleProteinAffinityModule(
-                        affinity_module=self.affinity_module,
-                        **ensemble_args
-                    )
+                
+                self.affinity_module_ensemble = EnsembleProteinAffinityModule(
+                    input_embedder=self.input_embedder,
+                    affinity_module=self.affinity_module,
+                    atomic_affinity = self.atomic_affinity,
+                    **ensemble_args
+                )
                 
         # Remove grad from weights they are not trained for ddp
         if not structure_prediction_training:
@@ -718,7 +720,6 @@ class Boltz2Ensemble(LightningModule):
                         x_pred=coords_affinity,
                         feats=feats,
                         run_recycling=self._run_recycling,
-                        recycling_steps=recycling_steps,
                         multiplicity=1,
                         use_kernels=self.use_kernels,
                     )
@@ -728,7 +729,6 @@ class Boltz2Ensemble(LightningModule):
                         x_pred=coords_affinity,
                         feats=feats,
                         run_recycling=self._run_recycling,
-                        recycling_steps=recycling_steps,
                         multiplicity=1,
                         use_kernels=self.use_kernels,
                     )
@@ -810,6 +810,7 @@ class Boltz2Ensemble(LightningModule):
                         z=z.detach(),
                         x_pred=coords_affinity,
                         feats=feats,
+                        run_recycling=self._run_recycling,
                         multiplicity=1,
                         use_kernels=self.use_kernels,
                     )
