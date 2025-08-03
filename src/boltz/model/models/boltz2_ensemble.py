@@ -532,8 +532,6 @@ class Boltz2Ensemble(LightningModule):
             mask = feats["token_pad_mask"].float()
             pair_mask = mask[:, :, None] * mask[:, None, :]
 
-            print("Run trunk and structure")
-            print(self.run_trunk_and_structure)
             if self.run_trunk_and_structure:
                 for i in range(recycling_steps + 1):
                     with torch.set_grad_enabled(
@@ -720,6 +718,7 @@ class Boltz2Ensemble(LightningModule):
                         x_pred=coords_affinity,
                         feats=feats,
                         run_recycling=self._run_recycling,
+                        recycling_steps = recycling_steps,
                         multiplicity=1,
                         use_kernels=self.use_kernels,
                     )
@@ -729,6 +728,7 @@ class Boltz2Ensemble(LightningModule):
                         x_pred=coords_affinity,
                         feats=feats,
                         run_recycling=self._run_recycling,
+                        recycling_steps = recycling_steps,
                         multiplicity=1,
                         use_kernels=self.use_kernels,
                     )
@@ -811,6 +811,7 @@ class Boltz2Ensemble(LightningModule):
                         x_pred=coords_affinity,
                         feats=feats,
                         run_recycling=self._run_recycling,
+                        recycling_steps = recycling_steps,
                         multiplicity=1,
                         use_kernels=self.use_kernels,
                     )

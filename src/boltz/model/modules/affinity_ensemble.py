@@ -396,6 +396,7 @@ class EnsembleProteinAffinityModule():
         feats: Dict[str, torch.Tensor],
         run_recycling: nn.Module,
         multiplicity: int = 1,
+        recycling_steps: int = 1,
         use_kernels: bool = False,
         ensemble_weights: bool = False,
     ) -> Dict[str, torch.Tensor]:
