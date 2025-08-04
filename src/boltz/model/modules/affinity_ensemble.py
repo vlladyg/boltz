@@ -11,6 +11,9 @@ from typing import Optional
 from boltz.data.tokenize.boltz2 import TokenData, token_astuple
 from boltz.data import const
 from boltz.data.feature.protein_protein_featurizer import ProteinProteinFeaturizer
+from boltz.data.mol import load_molecules
+from boltz.data.parse.schema import parse_ccd_residue
+from rdkit.Chem import Mol
 
 class EnsembleProteinAffinityModule():
     """
@@ -29,6 +32,8 @@ class EnsembleProteinAffinityModule():
         atomic_affinity: bool,
         ensemble_sampling_strategy: str = "top_k",  # "random", "top_k", "all"
         min_ensemble_size: int = 5,
+        ccd_templates: Optional[Dict[str, Mol]] = None,
+        mol_dir: Optional[str] = None,
         **kwargs
     ):
         """
@@ -38,10 +43,16 @@ class EnsembleProteinAffinityModule():
         ----------
         affinity_module : AffinityModule
             Pre-initialized protein-ligand affinity module to use for predictions
+        atomic_affinity : bool
+            Whether to use atomic-level tokenization (following ligand pattern)
         min_ensemble_size : int
             Minimum number of residues to include in ensemble
         ensemble_sampling_strategy : str
             Strategy for selecting residues: "random", "top_k", "all"
+        ccd_templates : Optional[Dict[str, Mol]]
+            Pre-loaded CCD templates for amino acids
+        mol_dir : Optional[str]
+            Directory containing CCD molecule files for loading on demand
         """
         super().__init__()
         
@@ -54,8 +65,42 @@ class EnsembleProteinAffinityModule():
         self.min_ensemble_size = min_ensemble_size
         self.ensemble_sampling_strategy = ensemble_sampling_strategy
         self.featurizer = ProteinProteinFeaturizer()
+        
+        # CCD template management
+        self.ccd_templates = ccd_templates or {}
+        self.mol_dir = mol_dir
 
-    
+    def _get_amino_acid_ccd_template(self, res_name: str) -> Optional[Mol]:
+        """
+        Get CCD template for an amino acid.
+        
+        Parameters
+        ----------
+        res_name : str
+            Three-letter amino acid code (e.g., 'ALA', 'GLY')
+            
+        Returns
+        -------
+        Optional[Mol]
+            RDKit molecule with CCD template information, or None if not found
+        """
+        # Check if we already have the template cached
+        if res_name in self.ccd_templates:
+            return self.ccd_templates[res_name]
+        
+        # Try to load from mol_dir if available
+        if self.mol_dir is not None:
+            try:
+                loaded_mols = load_molecules(self.mol_dir, [res_name])
+                mol = loaded_mols[res_name]
+                self.ccd_templates[res_name] = mol  # Cache for future use
+                return mol
+            except (ValueError, KeyError, FileNotFoundError):
+                # CCD template not found, will fall back to simple approach
+                pass
+        
+        return None
+
     def _identify_binder_residues(self, feats: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Identify residues that belong to the binder protein.
@@ -191,9 +236,10 @@ class EnsembleProteinAffinityModule():
         
     def _retokenize_residue_as_atoms(self, tokenized_data, residue_token_idx):
         """
-        Retokenize a specific residue using Boltz's NONPOLYMER atomic tokenization logic.
+        Retokenize a specific residue using CCD template information for ligand-like properties.
         
-        This uses the exact same code path as ligand tokenization (lines 260-307 in boltz2.py).
+        This enhanced version uses CCD templates to get proper bond information,
+        atomic properties, and geometric constraints like ligands do.
         """
         # Get the residue token
         residue_token = tokenized_data.tokens[residue_token_idx]
@@ -204,9 +250,11 @@ class EnsembleProteinAffinityModule():
         # Find the residue in the structure
         res_idx = residue_token['res_idx']
         asym_id = residue_token['asym_id']
-
-        print("Res idx, asym id")
-        print(res_idx, asym_id)
+        res_name = residue_token['res_name'] if 'res_name' in residue_token.dtype.names else None
+    
+        #print("Res idx, asym id, res_name")
+        #print(res_idx, asym_id, res_name)
+        
         # Find the chain and residue
         chain = None
         residue = None
@@ -231,12 +279,27 @@ class EnsembleProteinAffinityModule():
         
         # Get coordinates (using first ensemble)
         offset = struct.ensemble[0]['atom_coord_idx']
-
-        print("Offset atom start atom end")
-        print(offset, atom_start, atom_end)
+    
+        #print("Offset atom start atom end")
+        #print(offset, atom_start, atom_end)
         atom_coords = struct.coords[offset + atom_start : offset + atom_end]['coords']
         
-        # Create atomic tokens using NONPOLYMER tokenization logic
+        # Try to get CCD template for enhanced properties
+        ccd_mol = None
+        parsed_ccd_residue = None
+        if res_name:
+            ccd_mol = self._get_amino_acid_ccd_template(res_name)
+            if ccd_mol is not None:
+                try:
+                    # Parse the CCD residue to get bond and constraint information
+                    parsed_ccd_residue = parse_ccd_residue(res_name, ccd_mol, res_idx, drop_leaving_atoms=True)
+                except Exception as e:
+                    print(f"Warning: Could not parse CCD template for {res_name}: {e}")
+                    parsed_ccd_residue = None
+
+        #print("CCD atoms")
+        #print([el.name for el in parsed_ccd_residue.atoms])
+        # Create atomic tokens with enhanced CCD information
         atomic_tokens = []
         unk_token = const.unk_token["PROTEIN"]
         unk_id = const.token_ids[unk_token]
@@ -244,12 +307,31 @@ class EnsembleProteinAffinityModule():
         # Start token numbering from the original residue token index
         token_idx = tokenized_data.tokens[residue_token_idx][0]
         
+        # Create atom name to index mapping for CCD bond lookup
+        atom_name_to_token_idx = {}
+        #print("Struct atoms")
+        #print(atom_data)
         for i, atom in enumerate(atom_data):
             # Token is present if atom is present
             is_present = residue['is_present'] & atom['is_present']
             atom_index = atom_start + i
             
-            # Create atomic token (following lines 277-302 in boltz2.py exactly)
+            # Get enhanced properties from CCD template if available
+            atom_name = atom['name'] if 'name' in atom.dtype.names else f"ATOM_{i}"
+            element = atom['element'] if 'element' in atom.dtype.names else 6  # Default to carbon
+            charge = 0  # Default charge
+            
+            # If we have CCD parsed residue, try to get enhanced atom properties
+            if parsed_ccd_residue is not None:
+                for ccd_atom in parsed_ccd_residue.atoms:
+                    if ccd_atom.name == atom_name:
+                        if hasattr(ccd_atom, 'element'):
+                            element = ccd_atom.element
+                        if hasattr(ccd_atom, 'charge'):
+                            charge = ccd_atom.charge
+                        break
+            
+            # Create atomic token with enhanced properties
             atomic_token = TokenData(
                 token_idx=token_idx,
                 atom_idx=atom_index,
@@ -276,15 +358,96 @@ class EnsembleProteinAffinityModule():
             )
             
             atomic_tokens.append(token_astuple(atomic_token))
+            atom_name_to_token_idx[atom_name] = token_idx
             token_idx += 1
-        
-        return atomic_tokens
     
-    def _create_retokenized_structure(self, tokenized_data, residue_token_idx):
-        """Create new tokenized structure with one residue converted to atomic tokens."""
+        #print(atom_name_to_token_idx)
+        # Store enhanced bond information for potential use in featurization
+        enhanced_bonds = []
+        #print(parsed_ccd_residue.bonds)
+        if parsed_ccd_residue is not None and parsed_ccd_residue.bonds:
+            # Map CCD bonds to our token indices
+            for bond in parsed_ccd_residue.bonds:
+                # CCD bonds reference atom indices within the parsed residue
+                if (bond.atom_1 < len(parsed_ccd_residue.atoms) and 
+                    bond.atom_2 < len(parsed_ccd_residue.atoms)):
+                    
+                    atom1_name = parsed_ccd_residue.atoms[bond.atom_1].name
+                    atom2_name = parsed_ccd_residue.atoms[bond.atom_2].name
+    
+                    # Find corresponding token indices
+                    if (atom1_name in atom_name_to_token_idx and 
+                        atom2_name in atom_name_to_token_idx):
+                        
+                        token1_idx = atom_name_to_token_idx[atom1_name]
+                        token2_idx = atom_name_to_token_idx[atom2_name]
+    
+                        # Is the bond type right
+                        enhanced_bonds.append((token1_idx, token2_idx, bond.type + 1))
         
-        # Get atomic tokens for the selected residue
-        atomic_tokens = self._retokenize_residue_as_atoms(tokenized_data, residue_token_idx)
+        # Store enhanced information for potential future use
+        #if enhanced_bonds:
+        #    print(f"Created {len(enhanced_bonds)} enhanced bonds for residue {res_name}")
+    
+        return atomic_tokens, enhanced_bonds
+    
+    def _create_enhanced_bonds(self, tokenized_data, atomic_tokens, enhanced_bonds, residue_token_idx):
+        """
+        Create enhanced bond array incorporating CCD template bond information.
+        
+        Parameters
+        ----------
+        tokenized_data : Tokenized
+            Original tokenized structure
+        atomic_tokens : list
+            List of atomic tokens for the retokenized residue
+        enhanced_bonds : list
+            Bond information from CCD template
+        residue_token_idx : int
+            Index of the original residue token being replaced
+            
+        Returns
+        -------
+        np.ndarray
+            Enhanced bond array with CCD bond information
+        """
+        from boltz.data.types import TokenBondV2
+        
+        # Start with original bonds, filtering out any that involve the residue being replaced
+        original_bonds = tokenized_data.bonds
+        filtered_bonds = []
+        
+        # Get the range of original token indices that will be replaced
+        num_atomic = len(atomic_tokens)
+        original_token_idx = tokenized_data.tokens[residue_token_idx][0]  # token_idx field
+        
+        # Filter out bonds involving the original residue token
+        for bond in original_bonds:
+            token1, token2, bond_type = bond # TokenBondV2 format (token1, token2, bond_type)
+                
+            # Keep bonds that don't involve the original residue token
+            if token1 != original_token_idx and token2 != original_token_idx:
+                # Adjust token indices for tokens that come after the insertion point
+                if token1 > original_token_idx:
+                    token1 += (num_atomic - 1)
+                if token2 > original_token_idx:
+                    token2 += (num_atomic - 1)
+                    
+                filtered_bonds.append((token1, token2, bond_type))
+        
+        # Add enhanced bonds from CCD template
+        for bond_info in enhanced_bonds:
+            # TokenBondV2 format
+            filtered_bonds.append(bond_info)
+        
+        # Convert to appropriate numpy array
+        return np.array(filtered_bonds, dtype=TokenBondV2)
+
+    def _create_retokenized_structure(self, tokenized_data, residue_token_idx):
+        """Create new tokenized structure with one residue converted to atomic tokens and enhanced bonds."""
+        
+        # Get atomic tokens for the selected residue - this now returns enhanced information
+        atomic_tokens, enhanced_bonds = self._retokenize_residue_as_atoms(tokenized_data, residue_token_idx)
         
         # Create new token array
         original_tokens = tokenized_data.tokens
@@ -318,11 +481,16 @@ class EnsembleProteinAffinityModule():
             
             new_tokens[remaining_start:] = remaining_tokens
         
-        # Create new tokenized object with atomic tokens
+        # Create enhanced bonds incorporating CCD template information
+        enhanced_bond_array = self._create_enhanced_bonds(
+            tokenized_data, atomic_tokens, enhanced_bonds, residue_token_idx
+        )
+        
+        # Create new tokenized object with atomic tokens and enhanced bonds
         from boltz.data.types import Tokenized
         new_tokenized = Tokenized(
             tokens=new_tokens,
-            bonds=tokenized_data.bonds,  # Keep original bonds for simplicity
+            bonds=enhanced_bond_array,  # Use enhanced bonds with CCD information
             structure=tokenized_data.structure,
             msa=tokenized_data.msa,
             record=tokenized_data.record,
@@ -532,116 +700,13 @@ class EnsembleProteinAffinityModule():
             }
 
 
-class AdaptiveEnsembleProteinAffinityModule(EnsembleProteinAffinityModule):
-    """
-    Adaptive ensemble protein affinity module with interface-aware residue selection.
-    
-    This extends the basic ensemble approach by adaptively selecting residues
-    based on their proximity to the protein-protein interface.
-    """
-
-    def __init__(
-        self,
-        affinity_module: AffinityModule,
-        interface_cutoff: float = 8.0,
-        **kwargs
-    ):
-        """
-        Initialize adaptive ensemble module.
-        
-        Parameters
-        ----------
-        affinity_module : AffinityModule
-            Pre-initialized protein-ligand affinity module to use for predictions
-        interface_cutoff : float
-            Distance cutoff for defining interface residues
-        """
-        super().__init__(
-            affinity_module=affinity_module,
-            **kwargs
-        )
-        self.interface_cutoff = interface_cutoff
-
-    def _select_ensemble_residues(
-        self, 
-        binder_indices: torch.Tensor,
-        feats: Dict[str, torch.Tensor],
-        x_pred: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Select ensemble residues based on interface proximity.
-        
-        Prioritizes residues that are close to the protein-protein interface.
-        """
-        num_binder_residues = len(binder_indices)
-        
-        if num_binder_residues == 0:
-            raise ValueError("No binder residues found for ensemble affinity prediction")
-        
-        # Get receptor residues
-        receptor_mask = feats["mol_type"] == const.chain_type_ids["PROTEIN"]
-        receptor_mask = receptor_mask & (feats["affinity_token_mask"] == 0)
-        receptor_indices = torch.where(receptor_mask)[0]
-        
-        if len(receptor_indices) == 0:
-            # Fallback to parent method
-            return super()._select_ensemble_residues(binder_indices, feats, x_pred)
-        
-        # Convert atom coordinates to token center coordinates
-        token_to_rep_atom = feats["token_to_rep_atom"]
-        
-        # Handle different x_pred shapes
-        if len(x_pred.shape) == 4:
-            # Shape: [batch, multiplicity, atoms, 3] -> use first sample
-            x_pred_atoms = x_pred[0, 0]  # [atoms, 3]
-        elif len(x_pred.shape) == 3:
-            # Shape: [batch*multiplicity, atoms, 3] -> use first batch
-            x_pred_atoms = x_pred[0]  # [atoms, 3]
-        else:
-            # Shape: [atoms, 3]
-            x_pred_atoms = x_pred
-        
-        # Get token center coordinates using representative atom mapping
-        token_coords = torch.bmm(
-            token_to_rep_atom[None].float(), 
-            x_pred_atoms[None]
-        )[0]  # [tokens, 3]
-        
-        # Compute interface residues using token coordinates
-        binder_coords = token_coords[binder_indices]
-        receptor_coords = token_coords[receptor_indices]
-        
-        # Compute minimum distances from each binder residue to any receptor residue
-        distances = torch.cdist(binder_coords, receptor_coords)
-        min_distances, _ = distances.min(dim=1)
-        
-        # Select interface residues (within cutoff)
-        interface_mask = min_distances <= self.interface_cutoff
-        interface_indices = binder_indices[interface_mask]
-        
-        # If we have enough interface residues, use them preferentially
-        if len(interface_indices) >= self.min_ensemble_size:
-            ensemble_size = min(len(interface_indices), self.max_ensemble_size)
-            
-            if len(interface_indices) <= ensemble_size:
-                return interface_indices
-            else:
-                # Select closest interface residues
-                interface_distances = min_distances[interface_mask]
-                _, closest_interface = torch.topk(
-                    interface_distances, k=ensemble_size, largest=False
-                )
-                return interface_indices[closest_interface]
-        else:
-            # Supplement interface residues with closest non-interface residues
-            ensemble_size = min(num_binder_residues, self.max_ensemble_size)
-            _, closest_all = torch.topk(min_distances, k=ensemble_size, largest=False)
-            return binder_indices[closest_all]
-
-
 def create_ensemble_protein_affinity_module(
+    input_embedder: InputEmbedder,
     affinity_module: AffinityModule,
+    atomic_affinity: bool,
     adaptive: bool = True,
+    ccd_templates: Optional[Dict[str, Mol]] = None,
+    mol_dir: Optional[str] = None,
     **kwargs
 ) -> EnsembleProteinAffinityModule:
     """
@@ -649,10 +714,18 @@ def create_ensemble_protein_affinity_module(
     
     Parameters
     ----------
+    input_embedder : InputEmbedder
+        Input embedder for the model
     affinity_module : AffinityModule
         Pre-initialized protein-ligand affinity module to use for predictions
+    atomic_affinity : bool
+        Whether to use atomic-level tokenization
     adaptive : bool
         Whether to use the adaptive interface-aware version
+    ccd_templates : Optional[Dict[str, Mol]]
+        Pre-loaded CCD templates for amino acids
+    mol_dir : Optional[str]
+        Directory containing CCD molecule files for loading on demand
     **kwargs
         Additional arguments passed to the module constructor
         
@@ -661,13 +734,11 @@ def create_ensemble_protein_affinity_module(
     EnsembleProteinAffinityModule
         Configured ensemble affinity module
     """
-    if adaptive:
-        return AdaptiveEnsembleProteinAffinityModule(
+    return EnsembleProteinAffinityModule(
+            input_embedder=input_embedder,
             affinity_module=affinity_module,
-            **kwargs
-        )
-    else:
-        return EnsembleProteinAffinityModule(
-            affinity_module=affinity_module,
+            atomic_affinity=atomic_affinity,
+            ccd_templates=ccd_templates,
+            mol_dir=mol_dir,
             **kwargs
         ) 

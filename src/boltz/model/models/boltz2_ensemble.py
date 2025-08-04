@@ -20,7 +20,7 @@ from boltz.model.loss.confidencev2 import (
 )
 from boltz.model.loss.distogramv2 import distogram_loss
 from boltz.model.modules.affinity import AffinityModule
-from boltz.model.modules.affinity_ensemble import EnsembleProteinAffinityModule, AdaptiveEnsembleProteinAffinityModule
+from boltz.model.modules.affinity_ensemble import EnsembleProteinAffinityModule
 from boltz.model.modules.confidencev2 import ConfidenceModule
 from boltz.model.modules.diffusion_conditioning import DiffusionConditioning
 from boltz.model.modules.diffusionv2 import AtomDiffusion
@@ -111,6 +111,7 @@ class Boltz2Ensemble(LightningModule):
         use_templates_v2: bool = False,
         use_kernels: bool = False,
         atomic_affinity: bool = False,
+        mol_dir: str = "~/.boltz/mols",
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["validators"])
@@ -328,6 +329,7 @@ class Boltz2Ensemble(LightningModule):
         if affinity_prediction:
 
             self.atomic_affinity = atomic_affinity
+            self.mol_dir = mol_dir
             # Create ensemble module with base affinity module
             ensemble_args = {
                 "max_ensemble_size": max_ensemble_size,
@@ -350,12 +352,14 @@ class Boltz2Ensemble(LightningModule):
                     input_embedder=self.input_embedder,
                     affinity_module=self.affinity_module1,
                     atomic_affinity = self.atomic_affinity,
+                    mol_dir = str(self.mol_dir),
                     **ensemble_args
                 )
                 self.affinity_module_ensemble2 = EnsembleProteinAffinityModule(
                     input_embedder=self.input_embedder,
                     affinity_module=self.affinity_module2,
                     atomic_affinity = self.atomic_affinity,
+                    mol_dir = str(self.mol_dir),
                     **ensemble_args
                 )
             else:
@@ -370,6 +374,7 @@ class Boltz2Ensemble(LightningModule):
                     input_embedder=self.input_embedder,
                     affinity_module=self.affinity_module,
                     atomic_affinity = self.atomic_affinity,
+                    mol_dir = str(self.mol_dir),
                     **ensemble_args
                 )
                 

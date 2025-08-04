@@ -1470,6 +1470,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
                 steering_args=asdict(steering_args),
                 affinity_mw_correction=affinity_mw_correction,
                 atomic_affinity = atomic_affinity,
+                mol_dir = mol_dir,
             )
         model_module.eval()
 
