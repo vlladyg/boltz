@@ -13,6 +13,7 @@ from boltz.data.types import Coords, Interface, Record, Structure, StructureV2
 from boltz.data.write.mmcif import to_mmcif
 from boltz.data.write.pdb import to_pdb
 
+from boltz.data.write.lis_lia import afm3_plot_average_to_df_my
 
 class BoltzWriter(BasePredictionWriter):
     """Custom writer for predictions."""
@@ -212,6 +213,56 @@ class BoltzWriter(BasePredictionWriter):
                         }
                         for idx1 in prediction["pair_chains_iptm"]
                     }
+
+
+                    # Compute lis lia from pae
+                    if "pae" in prediction:
+                        # Pae loading
+                        pae = prediction["pae"][model_idx]
+                        pae_matrix = pae.cpu().numpy()
+                        
+                        # Creating residues representation coordinates
+                        coordinates = new_structure.atoms[new_structure.atoms['name'] == 'CA']['coords']
+                        
+                        # Creating token_chain_ids
+                        token_chain_ids = ['A']*len(new_structure.residues)
+                        for chain in new_structure.chains:
+                            token_chain_ids[chain['res_idx']:chain['res_idx'] + chain['res_num']] = [chain['name']]*chain['res_num']
+    
+                        
+                        # Creating chain iptm array
+                        N = max([int(key) for key in confidence_summary_dict["pair_chains_iptm"]])
+                        chain_pair_iptm = np.zeros((N+1, N+1))
+                        for key1 in confidence_summary_dict["pair_chains_iptm"]:
+                            for key2 in confidence_summary_dict["pair_chains_iptm"][key1]:
+                                chain_pair_iptm[int(key1), int(key2)] = confidence_summary_dict["pair_chains_iptm"][key1][key2]
+
+                        df_interactions, ilis_matrix, ilia_matrix = afm3_plot_average_to_df_my(pae_matrix, 
+                                                                     token_chain_ids, 
+                                                                     chain_pair_iptm, 
+                                                                     coordinates, 
+                                                                     pae_cutoff = 12, 
+                                                                     distance_cutoff = 8
+                                                                    )
+                        ilis_matrix = ilis_matrix.tolist()
+                        ilia_matrix = ilia_matrix.tolist()
+                        confidence_summary_dict["pair_chains_ilis"] = {
+                            idx1: {
+                                idx2: ilis_matrix[int(idx1)][int(idx2)]
+                                for idx2 in prediction["pair_chains_iptm"][idx1]
+                            }
+                            for idx1 in prediction["pair_chains_iptm"]
+                        }
+
+                        confidence_summary_dict["pair_chains_ilia"] = {
+                            idx1: {
+                                idx2: ilia_matrix[int(idx1)][int(idx2)]
+                                for idx2 in prediction["pair_chains_iptm"][idx1]
+                            }
+                            for idx1 in prediction["pair_chains_iptm"]
+                        }
+                        
+                    
                     with path.open("w") as f:
                         f.write(
                             json.dumps(
