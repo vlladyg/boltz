@@ -200,6 +200,10 @@ class BoltzWriter(BasePredictionWriter):
                         "complex_ipde",
                     ]:
                         confidence_summary_dict[key] = prediction[key][model_idx].item()
+                    
+                    #print("IPTM", model_idx)
+                    #print(prediction['iptm'][model_idx])
+                    confidence_summary_dict["best_iptm_idx"] = idx_to_rank[prediction["best_iptm_idx"]] 
                     confidence_summary_dict["chains_ptm"] = {
                         idx: prediction["pair_chains_iptm"][idx][idx][model_idx].item()
                         for idx in prediction["pair_chains_iptm"]
@@ -359,7 +363,6 @@ class BoltzAffinityWriter(BasePredictionWriter):
         pred_affinity_value = prediction["affinity_pred_value"]
         pred_affinity_probability = prediction["affinity_probability_binary"]
         affinity_summary = {
-            "best_iptm_idx": prediction["best_iptm_idx"].item(),
             "affinity_pred_value": pred_affinity_value.item(),
             "affinity_probability_binary": pred_affinity_probability.item(),
         }

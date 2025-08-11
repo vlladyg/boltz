@@ -714,7 +714,6 @@ class Boltz2Ensemble(LightningModule):
             
             # Finding and saving the best iptm index
             best_idx = argsort[0].item()
-            dict_out['best_iptm_idx'] = best_idx
             coords_affinity = dict_out["sample_atom_coords"].detach()[best_idx][
                 None, None
             ]
@@ -1234,12 +1233,17 @@ class Boltz2Ensemble(LightningModule):
                     pred_dict["pae"] = out["pae"]
                     pred_dict["ptm"] = out["ptm"]
                     pred_dict["iptm"] = out["iptm"]
+                    
+                    argsort = torch.argsort(pred_dict["iptm"], descending=True)
+                    # Finding and saving the best iptm index
+                    best_idx = argsort[0].item()
+                    pred_dict["best_iptm_idx"] = best_idx
+                    
                     pred_dict["ligand_iptm"] = out["ligand_iptm"]
                     pred_dict["protein_iptm"] = out["protein_iptm"]
                     pred_dict["pair_chains_iptm"] = out["pair_chains_iptm"]
             if self.affinity_prediction:
 
-                pred_dict["best_iptm_idx"] = out["best_iptm_idx"]
                 pred_dict["affinity_pred_value"] = out["affinity_pred_value"]
                 pred_dict["affinity_probability_binary"] = out[
                     "affinity_probability_binary"
