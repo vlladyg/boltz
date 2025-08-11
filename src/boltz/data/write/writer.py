@@ -359,6 +359,7 @@ class BoltzAffinityWriter(BasePredictionWriter):
         pred_affinity_value = prediction["affinity_pred_value"]
         pred_affinity_probability = prediction["affinity_probability_binary"]
         affinity_summary = {
+            "best_iptm_idx": prediction["best_iptm_idx"].item(),
             "affinity_pred_value": pred_affinity_value.item(),
             "affinity_probability_binary": pred_affinity_probability.item(),
         }
