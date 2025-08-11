@@ -981,6 +981,7 @@ def cli() -> None:
 )
 
 
+
 @click.option(
     "--protein_ligand_mode",
     is_flag=True,
@@ -990,7 +991,13 @@ def cli() -> None:
 @click.option(
     "--atomic_affinity",
     is_flag=True,
-    help="Whether to use protein protein module for binding affinity predictions. Default is False.",
+    help="Whether to use per residue atomic tokenization for binding affinity predictions. Default is False.",
+)
+
+@click.option(
+    "--process_yaml",
+    is_flag=True,
+    help="Whether to stop after yaml processing. Default is False.",
 )
 
 @click.option(
@@ -1096,6 +1103,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     write_embeddings: bool = False,
     protein_ligand_mode: bool = False,
     atomic_affinity: bool = False,
+    process_yaml: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1194,6 +1202,9 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         preprocessing_threads=preprocessing_threads,
         max_msa_seqs=max_msa_seqs,
     )
+    
+    if process_yaml:
+        return 
 
     # Load manifest
     manifest = Manifest.load(out_dir / "processed" / "manifest.json")
