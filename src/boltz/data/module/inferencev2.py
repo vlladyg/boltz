@@ -320,10 +320,10 @@ class PredictionDataset(torch.utils.data.Dataset):
                                         "compute_affinity": self.affinity,
         }
 
-        import pickle
-        file_path = 'features.pkl'
-        with open(file_path, 'wb') as file:
-            pickle.dump(features, file)
+        #import pickle
+        #file_path = 'features.pkl'
+        #with open(file_path, 'wb') as file:
+        #    pickle.dump(features, file)
 
         return features
 
