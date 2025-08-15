@@ -901,7 +901,7 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
             parsed_polymer = parse_polymer(
                 polymer=raw_chain,
                 polymer_type=entity.polymer_type,
-                sequence=entity.full_sequence,
+                sequence=entity.full_sequence if entity.full_sequence else [res.name for res in raw_chain],
                 chain_id=subchain_id,
                 entity=entity.name,
                 mols=mols,
