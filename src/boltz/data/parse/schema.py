@@ -1065,12 +1065,12 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 msg = f"Could not find binder with name {binder} in the input!"
                 raise ValueError(msg)
 
-            # Support both protein and ligand binders for affinity prediction
+            # Support protein, nucleic acid, and ligand binders for affinity prediction
             binder_type = chain_name_to_entity_type[binder]
-            if binder_type not in {"ligand", "protein"}:
+            if binder_type not in {"ligand", "protein", "dna", "rna"}:
                 msg = (
-                    f"Chain {binder} is neither a ligand nor a protein! "
-                    "Affinity is currently supported for ligands and proteins."
+                    f"Chain {binder} must be one of ligand, protein, dna, or rna "
+                    "for affinity prediction."
                 )
                 raise ValueError(msg)
 
@@ -1344,8 +1344,15 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             raise ValueError(msg)
 
         if chain.affinity:
-            # Determine binder type based on chain type 
-            binder_type = "protein" if chain.type == const.chain_type_ids["PROTEIN"] else "ligand"
+            # Determine binder type based on chain type (protein/dna/rna/ligand)
+            if chain.type == const.chain_type_ids["PROTEIN"]:
+                binder_type = "protein"
+            elif chain.type == const.chain_type_ids["DNA"]:
+                binder_type = "dna"
+            elif chain.type == const.chain_type_ids["RNA"]:
+                binder_type = "rna"
+            else:
+                binder_type = "ligand"
             affinity_info = AffinityInfo(
                 chain_id=asym_id,
                 mw=chain.affinity_mw if chain.affinity_mw is not None else 0.0,

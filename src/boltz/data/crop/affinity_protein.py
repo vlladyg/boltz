@@ -113,15 +113,15 @@ class ProteinProteinAffinityCropper(Cropper):
             msg = "No valid tokens in structure"
             raise ValueError(msg)
 
-        # Separate receptor and binder proteins
+        # Separate receptor proteins and polymer binders (protein/dna/rna)
         binder_tokens = valid_tokens[valid_tokens["affinity_mask"]]
         receptor_tokens = valid_tokens[
-            (~valid_tokens["affinity_mask"]) & 
+            (~valid_tokens["affinity_mask"]) &
             (valid_tokens["mol_type"] == const.chain_type_ids["PROTEIN"])
         ]
 
         if not binder_tokens.size or not receptor_tokens.size:
-            msg = "Need both receptor and binder proteins for protein-protein cropping"
+            msg = "Need at least one receptor protein and one binder (protein/dna/rna) for cropping"
             raise ValueError(msg)
 
         # Detect interface residues

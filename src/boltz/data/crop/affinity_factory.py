@@ -43,14 +43,20 @@ def create_affinity_cropper(
     valid_tokens = data.tokens[data.tokens["resolved_mask"]]
     binder_tokens = valid_tokens[valid_tokens["affinity_mask"]]
     
-    # Check if binder is protein or ligand
-    is_protein_protein = (
-        force_protein_protein or 
-        (binder_tokens.size > 0 and 
-         all(binder_tokens["mol_type"] == const.chain_type_ids["PROTEIN"]))
+    # Check if binder is protein or nucleic acid (dna/rna) for protein-polymer mode
+    is_protein_polymer = (
+        force_protein_protein or
+        (
+            binder_tokens.size > 0 and
+            all(
+                (binder_tokens["mol_type"] == const.chain_type_ids["PROTEIN"]) |
+                (binder_tokens["mol_type"] == const.chain_type_ids["DNA"]) |
+                (binder_tokens["mol_type"] == const.chain_type_ids["RNA"])
+            )
+        )
     )
     
-    if is_protein_protein:
+    if is_protein_polymer:
         return ProteinProteinAffinityCropper(
             neighborhood_size=neighborhood_size,
             max_tokens_protein=max_tokens_protein,

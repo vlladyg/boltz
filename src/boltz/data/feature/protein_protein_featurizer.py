@@ -45,17 +45,21 @@ class ProteinProteinFeaturizer(Boltz2Featurizer):
         
         # Use the affinity_mask from schema to identify chains
         for token in data.tokens:
-            if token["mol_type"] == const.chain_type_ids["PROTEIN"]:
-                chain_id = token["asym_id"]
-                
-                if token["affinity_mask"]:
-                    # This is the binder protein (defined in schema)
-                    if chain_id not in binder_chains:
-                        binder_chains.append(chain_id)
-                else:
-                    # This is the receptor protein
-                    if chain_id not in receptor_chains:
-                        receptor_chains.append(chain_id)
+            chain_id = token["asym_id"]
+            mol_type = token["mol_type"]
+            is_protein = mol_type == const.chain_type_ids["PROTEIN"]
+            is_polymer_binder = mol_type in (
+                const.chain_type_ids["PROTEIN"],
+                const.chain_type_ids["DNA"],
+                const.chain_type_ids["RNA"],
+            ) and token["affinity_mask"]
+
+            if is_polymer_binder:
+                if chain_id not in binder_chains:
+                    binder_chains.append(chain_id)
+            elif is_protein:
+                if chain_id not in receptor_chains:
+                    receptor_chains.append(chain_id)
         
         return receptor_chains, binder_chains
 
