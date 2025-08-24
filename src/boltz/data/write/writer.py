@@ -225,9 +225,17 @@ class BoltzWriter(BasePredictionWriter):
                         pae = prediction["pae"][model_idx]
                         pae_matrix = pae.cpu().numpy()
                         
-                        # Creating residues representation coordinates
-                        coordinates = new_structure.atoms[new_structure.atoms['name'] == 'CA']['coords']
-                        
+                        # Creating residues representation coordinates using residue center atom
+                        # This aligns the contact map size with the PAE matrix for proteins and nucleic acids
+                        residues_tbl = new_structure.residues
+                        atoms_tbl = new_structure.atoms
+                        coordinates = np.zeros((len(residues_tbl), 3), dtype=np.float32)
+                        for i, res in enumerate(residues_tbl):
+                            # atom_center is already an absolute atom index after remove_invalid_chains
+                            center_atom_global_idx = int(res["atom_center"]) 
+                            coordinates[i] = atoms_tbl[center_atom_global_idx]["coords"]
+
+                            
                         # Creating token_chain_ids
                         token_chain_ids = ['A']*len(new_structure.residues)
                         for chain in new_structure.chains:
@@ -240,24 +248,24 @@ class BoltzWriter(BasePredictionWriter):
                         for key1 in confidence_summary_dict["pair_chains_iptm"]:
                             for key2 in confidence_summary_dict["pair_chains_iptm"][key1]:
                                 chain_pair_iptm[int(key1), int(key2)] = confidence_summary_dict["pair_chains_iptm"][key1][key2]
-
+                        
                         df_interactions, ilis_matrix, ilia_matrix = afm3_plot_average_to_df_my(pae_matrix, 
-                                                                     token_chain_ids, 
-                                                                     chain_pair_iptm, 
-                                                                     coordinates, 
-                                                                     pae_cutoff = 12, 
-                                                                     distance_cutoff = 8
-                                                                    )
+                                                             token_chain_ids, 
+                                                             chain_pair_iptm, 
+                                                             coordinates, 
+                                                             pae_cutoff = 12, 
+                                                             distance_cutoff = 8
+                                                            )
                         ilis_matrix = ilis_matrix.tolist()
                         ilia_matrix = ilia_matrix.tolist()
                         confidence_summary_dict["pair_chains_ilis"] = {
                             idx1: {
                                 idx2: ilis_matrix[int(idx1)][int(idx2)]
                                 for idx2 in prediction["pair_chains_iptm"][idx1]
-                            }
-                            for idx1 in prediction["pair_chains_iptm"]
+                                }
+                                for idx1 in prediction["pair_chains_iptm"]
                         }
-
+                        
                         confidence_summary_dict["pair_chains_ilia"] = {
                             idx1: {
                                 idx2: ilia_matrix[int(idx1)][int(idx2)]
