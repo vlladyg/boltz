@@ -118,6 +118,7 @@ class EnsembleProteinAffinityModule():
         affinity_mask = feats["affinity_token_mask"]
         
         binder_indices = torch.where(affinity_mask[0] > 0)[0]
+        
         return binder_indices
 
     def _select_ensemble_residues(
@@ -250,10 +251,9 @@ class EnsembleProteinAffinityModule():
         # Find the residue in the structure
         res_idx = residue_token['res_idx']
         asym_id = residue_token['asym_id']
+
         res_name = residue_token['res_name'] if 'res_name' in residue_token.dtype.names else None
-    
-        #print("Res idx, asym id, res_name")
-        #print(res_idx, asym_id, res_name)
+
         
         # Find the chain and residue
         chain = None
@@ -280,8 +280,6 @@ class EnsembleProteinAffinityModule():
         # Get coordinates (using first ensemble)
         offset = struct.ensemble[0]['atom_coord_idx']
     
-        #print("Offset atom start atom end")
-        #print(offset, atom_start, atom_end)
         atom_coords = struct.coords[offset + atom_start : offset + atom_end]['coords']
         
         # Try to get CCD template for enhanced properties
@@ -297,8 +295,6 @@ class EnsembleProteinAffinityModule():
                     print(f"Warning: Could not parse CCD template for {res_name}: {e}")
                     parsed_ccd_residue = None
 
-        #print("CCD atoms")
-        #print([el.name for el in parsed_ccd_residue.atoms])
         # Create atomic tokens with enhanced CCD information
         atomic_tokens = []
         unk_token = const.unk_token["PROTEIN"]
@@ -309,8 +305,7 @@ class EnsembleProteinAffinityModule():
         
         # Create atom name to index mapping for CCD bond lookup
         atom_name_to_token_idx = {}
-        #print("Struct atoms")
-        #print(atom_data)
+
         for i, atom in enumerate(atom_data):
             # Token is present if atom is present
             is_present = residue['is_present'] & atom['is_present']
@@ -361,10 +356,9 @@ class EnsembleProteinAffinityModule():
             atom_name_to_token_idx[atom_name] = token_idx
             token_idx += 1
     
-        #print(atom_name_to_token_idx)
+
         # Store enhanced bond information for potential use in featurization
         enhanced_bonds = []
-        #print(parsed_ccd_residue.bonds)
         if parsed_ccd_residue is not None and parsed_ccd_residue.bonds:
             # Map CCD bonds to our token indices
             for bond in parsed_ccd_residue.bonds:
@@ -386,8 +380,6 @@ class EnsembleProteinAffinityModule():
                         enhanced_bonds.append((token1_idx, token2_idx, bond.type + 1))
         
         # Store enhanced information for potential future use
-        #if enhanced_bonds:
-        #    print(f"Created {len(enhanced_bonds)} enhanced bonds for residue {res_name}")
     
         return atomic_tokens, enhanced_bonds
     
@@ -474,7 +466,6 @@ class EnsembleProteinAffinityModule():
             remaining_tokens = original_tokens[original_remaining_start:].copy().tolist()
             # Adjust token_idx for all remaining tokens
             for i in range(len(remaining_tokens)):
-                #print(remaining_tokens[i])
                 remaining_tokens[i] = list(remaining_tokens[i])
                 remaining_tokens[i][0] += (num_atomic - 1)  # token_idx adjustment
                 remaining_tokens[i] = tuple(remaining_tokens[i])
@@ -549,7 +540,7 @@ class EnsembleProteinAffinityModule():
         single_residue_feats = {}
         for key, value in feats.items():
             single_residue_feats[key] = value.clone() if isinstance(value, torch.Tensor) else value
-        
+
         # Create new affinity mask with only one residue active
         new_affinity_mask = torch.zeros_like(feats["affinity_token_mask"])
         new_affinity_mask[0, residue_idx] = 1.0
