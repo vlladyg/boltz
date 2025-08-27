@@ -1345,10 +1345,6 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             protein_chains.add(chain_name)
 
         # Add affinity info
-        if (chain_name in binder_chain_names) and affinity_info is not None:
-            msg = "Cannot compute affinity for multiple binder groups!"
-            raise ValueError(msg)
-
         if chain_name in binder_chain_names:
             # Determine binder type based on chain type (protein/dna/rna/ligand)
             if chain.type == const.chain_type_ids["PROTEIN"]:
@@ -1360,13 +1356,23 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             else:
                 binder_type = "ligand"
             binder_types_seen.add(binder_type)
-            # Initialize on first binder chain, aggregate later
-            affinity_info = AffinityInfo(
-                chain_id=asym_id,
-                mw=chain.affinity_mw if chain.affinity_mw is not None else 0.0,
-                binder_type=binder_type,
-                chain_ids=[asym_id],
-            )
+            # Initialize once, extend for subsequent binder chains
+            if affinity_info is None:
+                affinity_info = AffinityInfo(
+                    chain_id=asym_id,
+                    mw=chain.affinity_mw if chain.affinity_mw is not None else 0.0,
+                    binder_type=binder_type,
+                    chain_ids=[asym_id],
+                )
+            else:
+                existing_ids = affinity_info.chain_ids or [affinity_info.chain_id]
+                if asym_id not in existing_ids:
+                    affinity_info = AffinityInfo(
+                        chain_id=affinity_info.chain_id,
+                        mw=affinity_info.mw,
+                        binder_type=affinity_info.binder_type,
+                        chain_ids=existing_ids + [asym_id],
+                    )
 
         # Find all copies of this chain in the assembly
         entity_id = int(chain.entity)
@@ -1515,10 +1521,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             res_idx += 1
 
         # If chain is part of binder group, append to chain_ids list
-        if (chain_name in binder_chain_names) and affinity_info is not None:
-            # Avoid duplicates; already added asym_id when initialized
-            if affinity_info.chain_ids is not None and affinity_info.chain_ids[-1] != asym_id:
-                affinity_info.chain_ids.append(asym_id)
+        # (no-op) aggregation handled above to respect frozen dataclass semantics
 
     # Validate binder types are consistent across chains
     if len(binder_types_seen) > 1:
