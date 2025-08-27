@@ -568,6 +568,9 @@ class AffinityInfo:
     chain_id: int
     mw: float
     binder_type: str = "ligand"  # "ligand" or "protein" - defaults to "ligand" for compatibility
+    # Optional support for multichain binders. If provided, tokenizer will mark
+    # affinity tokens for all chain_ids. Falls back to single chain_id for legacy inputs.
+    chain_ids: Optional[list[int]] = None
 
 
 @dataclass(frozen=True)

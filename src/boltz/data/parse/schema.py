@@ -1047,6 +1047,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
 
     # Check if any affinity ligand is present
     affinity_ligands = set()
+    affinity_ligand_groups: list[list[str]] = []  # supports multichain binder lists
     properties = schema.get("properties", [])
     if properties and not boltz_2:
         msg = "Affinity prediction is only supported for Boltz2!"
@@ -1056,29 +1057,31 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         prop_type = next(iter(prop.keys())).lower()
         if prop_type == "affinity":
             binder = prop["affinity"]["binder"]
-            if not isinstance(binder, str):
-                # TODO: support multi residue ligands and ccd's
-                msg = "Binder must be a single chain."
-                raise ValueError(msg)
+            # Accept single chain string or list of chains for multichain binder
+            binder_list = [binder] if isinstance(binder, str) else list(binder)
 
-            if binder not in chain_name_to_entity_type:
-                msg = f"Could not find binder with name {binder} in the input!"
-                raise ValueError(msg)
+            # Validate binders
+            valid_binders = []
+            for b in binder_list:
+                if b not in chain_name_to_entity_type:
+                    msg = f"Could not find binder with name {b} in the input!"
+                    raise ValueError(msg)
+                b_type = chain_name_to_entity_type[b]
+                if b_type not in {"ligand", "protein", "dna", "rna"}:
+                    msg = (
+                        f"Chain {b} must be one of ligand, protein, dna, or rna "
+                        "for affinity prediction."
+                    )
+                    raise ValueError(msg)
+                valid_binders.append(b)
 
-            # Support protein, nucleic acid, and ligand binders for affinity prediction
-            binder_type = chain_name_to_entity_type[binder]
-            if binder_type not in {"ligand", "protein", "dna", "rna"}:
-                msg = (
-                    f"Chain {binder} must be one of ligand, protein, dna, or rna "
-                    "for affinity prediction."
-                )
-                raise ValueError(msg)
+            # Track set for legacy checks and keep the group for later mapping to ids
+            affinity_ligands.update(valid_binders)
+            affinity_ligand_groups.append(valid_binders)
 
-            affinity_ligands.add(binder)
-
-    # Check only one affinity binder is present
-    if len(affinity_ligands) > 1:
-        msg = "Only one affinity binder is currently supported!"
+    # Allow multiple chains as one logical binder group, but only one binder group
+    if len(affinity_ligand_groups) > 1:
+        msg = "Only one affinity binder group is supported!"
         raise ValueError(msg)
 
     # Go through entities and parse them
@@ -1089,6 +1092,9 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
     is_msa_custom = False
     is_msa_auto = False
     ligand_id = 1
+    # If present, flatten binder chain names into a single set
+    binder_chain_names = set(affinity_ligand_groups[0]) if len(affinity_ligand_groups) == 1 else set()
+
     for entity_id, items in enumerate(items_to_group.values()):
         # Get entity type and sequence
         entity_type = next(iter(items[0].keys())).lower()
@@ -1101,12 +1107,11 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             elif isinstance(item[entity_type]["id"], list):
                 ids.extend(item[entity_type]["id"])
 
-        # Check if any affinity binder is present
-        if len(ids) == 1:
-            affinity = ids[0] in affinity_ligands
-        elif (len(ids) > 1) and any(x in affinity_ligands for x in ids):
-            msg = "Cannot compute affinity for a binder that has multiple copies!"
-            raise ValueError(msg)
+        # Check if any affinity binder is present (entity-level). For polymers, we
+        # support per-chain binders via binder_chain_names when building AffinityInfo,
+        # so keep entity affinity False. For ligands, keep legacy behaviour for mw.
+        if entity_type == "ligand" and len(ids) == 1 and ids[0] in binder_chain_names:
+            affinity = True
         else:
             affinity = False
 
@@ -1329,6 +1334,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
     # Keep a mapping of (chain_name, residue_idx, atom_name) to atom_idx
     atom_idx_map = {}
 
+    binder_types_seen = set()
     for asym_id, (chain_name, chain) in enumerate(chains.items()):
         # Compute number of atoms and residues
         res_num = len(chain.residues)
@@ -1339,11 +1345,11 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             protein_chains.add(chain_name)
 
         # Add affinity info
-        if chain.affinity and affinity_info is not None:
-            msg = "Cannot compute affinity for multiple binders!"
+        if (chain_name in binder_chain_names) and affinity_info is not None:
+            msg = "Cannot compute affinity for multiple binder groups!"
             raise ValueError(msg)
 
-        if chain.affinity:
+        if chain_name in binder_chain_names:
             # Determine binder type based on chain type (protein/dna/rna/ligand)
             if chain.type == const.chain_type_ids["PROTEIN"]:
                 binder_type = "protein"
@@ -1353,10 +1359,13 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 binder_type = "rna"
             else:
                 binder_type = "ligand"
+            binder_types_seen.add(binder_type)
+            # Initialize on first binder chain, aggregate later
             affinity_info = AffinityInfo(
                 chain_id=asym_id,
                 mw=chain.affinity_mw if chain.affinity_mw is not None else 0.0,
                 binder_type=binder_type,
+                chain_ids=[asym_id],
             )
 
         # Find all copies of this chain in the assembly
@@ -1504,6 +1513,17 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 atom_idx += 1
 
             res_idx += 1
+
+        # If chain is part of binder group, append to chain_ids list
+        if (chain_name in binder_chain_names) and affinity_info is not None:
+            # Avoid duplicates; already added asym_id when initialized
+            if affinity_info.chain_ids is not None and affinity_info.chain_ids[-1] != asym_id:
+                affinity_info.chain_ids.append(asym_id)
+
+    # Validate binder types are consistent across chains
+    if len(binder_types_seen) > 1:
+        msg = "All binder chains must share the same type (protein/dna/rna/ligand)."
+        raise ValueError(msg)
 
     # Parse constraints
     connections = []

@@ -169,9 +169,13 @@ def tokenize_structure(  # noqa: C901, PLR0915
         res_start = chain["res_idx"]
         res_end = chain["res_idx"] + chain["res_num"]
         is_protein = chain["mol_type"] == const.chain_type_ids["PROTEIN"]
-        affinity_mask = (affinity is not None) and (
-            int(chain["asym_id"]) == int(affinity.chain_id)
-        )
+        affinity_mask = False
+        if affinity is not None:
+            # Support single chain_id and optional list of chain_ids
+            if hasattr(affinity, "chain_ids") and affinity.chain_ids is not None:
+                affinity_mask = int(chain["asym_id"]) in set(int(i) for i in affinity.chain_ids)
+            else:
+                affinity_mask = int(chain["asym_id"]) == int(affinity.chain_id)
 
         for res in struct.residues[res_start:res_end]:
             # Get atom indices
